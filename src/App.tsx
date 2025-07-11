@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { Layout, Button, Upload, Card, Divider, Typography, message, List, Checkbox, Switch } from 'antd';
-import { UploadOutlined, DownloadOutlined, RedoOutlined, PlusOutlined, MinusOutlined, ExpandOutlined } from '@ant-design/icons';
+import { UploadOutlined, DownloadOutlined, RedoOutlined, PlusOutlined, MinusOutlined, ExpandOutlined, PictureOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import 'antd/dist/reset.css';
 
@@ -48,6 +48,15 @@ const App: React.FC = () => {
   const [moveSingleBlock, setMoveSingleBlock] = useState(false);
   const [showEntrance, setShowEntrance] = useState(false); // 默认隐藏入口
   const [showExit, setShowExit] = useState(false); // 默认隐藏出口
+  // 新增：场地参考图状态
+  const [backgroundImage, setBackgroundImage] = useState<{ texture: PIXI.Texture | null, x: number, y: number, scale: number, rotation: number } | null>(null);
+  const [bgImgDragging, setBgImgDragging] = useState(false);
+  const [bgImgDragOffset, setBgImgDragOffset] = useState<{ x: number, y: number } | null>(null);
+  const [bgImgSelected, setBgImgSelected] = useState(false);
+  const [bgImgPoints, setBgImgPoints] = useState<{x: number, y: number}[]>([]);
+  const [enableBgImgPoint, setEnableBgImgPoint] = useState(false); // 场地图打点功能toggle
+  // 记录导入的场地图片文件名
+  const [bgImgFileName, setBgImgFileName] = useState<string>('场地图点位.json');
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -186,6 +195,119 @@ const App: React.FC = () => {
     if (!layer) return;
     layer.removeChildren();
     const { scale, offsetX, offsetY } = viewTransform;
+    // 新增：渲染场地参考图
+    if (backgroundImage && backgroundImage.texture) {
+      const sprite = new PIXI.Sprite(backgroundImage.texture);
+      sprite.anchor.set(0.5);
+      sprite.x = backgroundImage.x * scale + offsetX;
+      sprite.y = backgroundImage.y * scale + offsetY;
+      sprite.scale.set(backgroundImage.scale * scale, backgroundImage.scale * scale);
+      sprite.rotation = backgroundImage.rotation;
+      sprite.alpha = 0.3;
+      sprite.interactive = true;
+      sprite.cursor = bgImgSelected ? 'move' : 'pointer';
+      sprite.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
+        if (bgImgSelected && enableBgImgPoint) {
+          // 计算点击点的图片本地坐标
+          const globalX = (event.global.x - offsetX) / scale;
+          const globalY = (event.global.y - offsetY) / scale;
+          // 逆变换：先平移，再缩放，再旋转
+          const dx = globalX - backgroundImage.x;
+          const dy = globalY - backgroundImage.y;
+          const r = -backgroundImage.rotation;
+          const sx = 1 / backgroundImage.scale;
+          const localX = (dx * Math.cos(r) - dy * Math.sin(r)) * sx;
+          const localY = (dx * Math.sin(r) + dy * Math.cos(r)) * sx;
+          setBgImgPoints(prev => {
+            if (prev.length > 0) {
+              const first = prev[0];
+              // 判断是否点击到第一个点（距离小于10像素）
+              const dist = Math.sqrt(Math.pow(localX - first.x, 2) + Math.pow(localY - first.y, 2));
+              if (dist < 10) {
+                // 闭合路径，添加第一个点为最后一个点
+                setEnableBgImgPoint(false);
+                return [...prev, { x: first.x, y: first.y }];
+              }
+            }
+            return [...prev, { x: localX, y: localY }];
+          });
+        } else {
+          setBgImgSelected(true);
+          setBgImgDragging(true);
+          setBgImgDragOffset({
+            x: (event.global.x - offsetX) / scale - backgroundImage.x,
+            y: (event.global.y - offsetY) / scale - backgroundImage.y,
+          });
+        }
+      });
+      layer.addChild(sprite as unknown as PIXI.DisplayObject);
+      // 渲染打点和连线
+      if (bgImgPoints.length > 0) {
+        // 画线
+        for (let i = 1; i < bgImgPoints.length; i++) {
+          const p1 = bgImgPoints[i - 1];
+          const p2 = bgImgPoints[i];
+          // 变换到图片世界坐标（不乘viewTransform.scale和offset）
+          const toWorld = (pt: {x: number, y: number}) => {
+            const sx = pt.x * backgroundImage.scale;
+            const sy = pt.y * backgroundImage.scale;
+            const rx = sx * Math.cos(backgroundImage.rotation) - sy * Math.sin(backgroundImage.rotation);
+            const ry = sx * Math.sin(backgroundImage.rotation) + sy * Math.cos(backgroundImage.rotation);
+            return {
+              x: backgroundImage.x + rx,
+              y: backgroundImage.y + ry,
+            };
+          };
+          const w1 = toWorld(p1);
+          const w2 = toWorld(p2);
+          // 渲染用的画布坐标
+          const toCanvas = (pt: {x: number, y: number}) => ({
+            x: pt.x * scale + offsetX,
+            y: pt.y * scale + offsetY,
+          });
+          const c1 = toCanvas(w1);
+          const c2 = toCanvas(w2);
+          const line = new PIXI.Graphics();
+          line.lineStyle(3, 0x00bcd4, 0.8)
+            .moveTo(c1.x, c1.y)
+            .lineTo(c2.x, c2.y);
+          layer.addChild(line as unknown as PIXI.DisplayObject);
+          // 距离（图片世界坐标系）
+          const dist = Math.sqrt(Math.pow(w2.x - w1.x, 2) + Math.pow(w2.y - w1.y, 2));
+          const mid = { x: (w1.x + w2.x) / 2, y: (w1.y + w2.y) / 2 };
+          const cmid = toCanvas(mid);
+          const distText = new PIXI.Text(dist.toFixed(2), {
+            fontSize: 18,
+            fill: 0xffeb3b,
+            fontWeight: 'bold',
+            align: 'center',
+            stroke: 0x000000,
+            strokeThickness: 4
+          });
+          distText.anchor.set(0.5, 1);
+          distText.x = cmid.x;
+          distText.y = cmid.y - 10;
+          layer.addChild(distText as unknown as PIXI.DisplayObject);
+        }
+        // 画点
+        for (let i = 0; i < bgImgPoints.length; i++) {
+          const pt = bgImgPoints[i];
+          const wpt = ((pt: {x: number, y: number}) => {
+            const sx = pt.x * backgroundImage.scale;
+            const sy = pt.y * backgroundImage.scale;
+            const rx = sx * Math.cos(backgroundImage.rotation) - sy * Math.sin(backgroundImage.rotation);
+            const ry = sx * Math.sin(backgroundImage.rotation) + sy * Math.cos(backgroundImage.rotation);
+            return {
+              x: backgroundImage.x + rx,
+              y: backgroundImage.y + ry,
+            };
+          })(pt);
+          const g = new PIXI.Graphics();
+          g.beginFill(0xff1744, 1).drawCircle(wpt.x, wpt.y, 8).endFill();
+          layer.addChild(g as unknown as PIXI.DisplayObject);
+        }
+      }
+    }
     // 计算所有动块的幕号到颜色的映射，并校验Name格式
     const sceneColorMap: Record<string, number> = {};
     let sceneList: string[] = [];
@@ -430,7 +552,7 @@ const App: React.FC = () => {
       app.stage.off('pointerup', handlePointerUp);
       app.stage.off('pointerupoutside', handlePointerUp);
     };
-  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit]);
+  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint]);
 
   // 鼠标滚轮缩放和右键平移（用ref保证状态同步）
   useEffect(() => {
@@ -538,6 +660,32 @@ const App: React.FC = () => {
         }
       };
       reader.readAsText(file);
+      return false;
+    },
+  };
+
+  // 参考图上传props
+  const bgImgUploadProps: UploadProps = {
+    accept: 'image/png',
+    showUploadList: false,
+    beforeUpload: (file) => {
+      setBgImgFileName(file.name.replace(/\.[^.]+$/, '.json'));
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const url = event.target?.result as string;
+        const texture = PIXI.Texture.from(url);
+        // 场地参考图中心点对齐到场地锚点(0,0)，初始缩放适配画布宽度
+        const container = pixiContainer.current;
+        const canvasWidth = container?.clientWidth || 1200;
+        const canvasHeight = container?.clientHeight || 800;
+        const img = new window.Image();
+        img.onload = () => {
+          const scale = Math.min(canvasWidth / img.width, canvasHeight / img.height) * 0.8;
+          setBackgroundImage({ texture, x: 0, y: 0, scale, rotation: 0 });
+        };
+        img.src = url;
+      };
+      reader.readAsDataURL(file);
       return false;
     },
   };
@@ -717,41 +865,156 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // 交互：拖拽/缩放/旋转图片
+  useEffect(() => {
+    if (!pixiReady || !backgroundImage || !bgImgSelected) return;
+    const container = pixiContainer.current;
+    if (!container) return;
+    const app = appRef.current;
+    if (!app) return;
+    const canvas = app.view as HTMLCanvasElement;
+    // 拖拽
+    const handlePointerMove = (e: PointerEvent) => {
+      if (bgImgDragging && bgImgDragOffset) {
+        const dx = (e.clientX - container.getBoundingClientRect().left) / viewTransform.scale - bgImgDragOffset.x;
+        const dy = (e.clientY - container.getBoundingClientRect().top) / viewTransform.scale - bgImgDragOffset.y;
+        setBackgroundImage(prev => prev ? { ...prev, x: dx, y: dy } : prev);
+      }
+    };
+    const handlePointerUp = () => {
+      setBgImgDragging(false);
+      setBgImgDragOffset(null);
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    // 缩放快捷键Q/E
+    let scaleTimer: NodeJS.Timeout | null = null;
+    let scaleDirection: 'in' | 'out' | null = null;
+    const startScale = (dir: 'in' | 'out') => {
+      if (scaleTimer) return;
+      scaleDirection = dir;
+      scaleTimer = setInterval(() => {
+        setBackgroundImage(prev => {
+          if (!prev) return prev;
+          let newScale = prev.scale;
+          if (dir === 'in') newScale = newScale * 1.01;
+          if (dir === 'out') newScale = newScale / 1.01;
+          return { ...prev, scale: Math.max(0.05, Math.min(10, newScale)) };
+        });
+      }, 100);
+    };
+    const stopScale = () => {
+      if (scaleTimer) clearInterval(scaleTimer);
+      scaleTimer = null;
+      scaleDirection = null;
+    };
+    // 缩放
+    const handleWheel = (e: WheelEvent) => {
+      if (bgImgSelected) {
+        e.preventDefault();
+        let newScale = backgroundImage.scale;
+        const zoomFactor = 1.1;
+        if (e.deltaY < 0) newScale = newScale * zoomFactor;
+        else newScale = newScale / zoomFactor;
+        setBackgroundImage(prev => prev ? { ...prev, scale: Math.max(0.05, Math.min(10, newScale)) } : prev);
+      }
+    };
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    // 旋转和缩放快捷键
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (bgImgSelected && (e.key === 'r' || e.key === 'R')) {
+        setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation + Math.PI / 12 } : prev); // 15度
+      }
+      if (bgImgSelected && (e.key === 'q' || e.key === 'Q')) {
+        startScale('in');
+      }
+      if (bgImgSelected && (e.key === 'e' || e.key === 'E')) {
+        startScale('out');
+      }
+      if (e.key === 'Escape') setBgImgSelected(false);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') {
+        stopScale();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      canvas.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      stopScale();
+    };
+  }, [pixiReady, backgroundImage, bgImgSelected, bgImgDragging, bgImgDragOffset, viewTransform]);
+
+  // 导出场地图点位
+  const handleExportBgImgPoints = () => {
+    const dataStr = JSON.stringify(bgImgPoints, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = bgImgFileName || '场地图点位.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    message.success('场地图点位已导出');
+  };
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider width={320} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2' }}>
         <div style={{ padding: 24 }}>
-          <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div>
-              <Switch checked={moveSingleBlock} onChange={setMoveSingleBlock} style={{ marginRight: 8 }} />
-              <span>可以移动单独动块</span>
-            </div>
-            <div>
-              <Switch checked={showEntrance} onChange={setShowEntrance} style={{ marginRight: 8 }} />
-              <span>显示入口</span>
-            </div>
-            <div>
-              <Switch checked={showExit} onChange={setShowExit} style={{ marginRight: 8 }} />
-              <span>显示出口</span>
+          {/* 功能开关区 */}
+          <div style={{ marginBottom: 24, padding: '8px 0' }}>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>显示与操作</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div>
+                <Switch checked={moveSingleBlock} onChange={setMoveSingleBlock} style={{ marginRight: 8 }} />
+                <span>可以移动单独动块</span>
+              </div>
+              <div>
+                <Switch checked={showEntrance} onChange={setShowEntrance} style={{ marginRight: 8 }} />
+                <span>显示入口</span>
+              </div>
+              <div>
+                <Switch checked={showExit} onChange={setShowExit} style={{ marginRight: 8 }} />
+                <span>显示出口</span>
+              </div>
+              <div>
+                <Switch checked={enableBgImgPoint} onChange={setEnableBgImgPoint} style={{ marginRight: 8 }} />
+                <span>场地图打点</span>
+              </div>
             </div>
           </div>
-          <Title level={3} style={{ marginBottom: 24 }}>动块编辑器</Title>
-          <Upload {...uploadProps}>
-            <Button icon={<UploadOutlined />} block type="primary" style={{ marginBottom: 16 }}>
-              导入JSON
-            </Button>
-          </Upload>
-          <Button icon={<DownloadOutlined />} block style={{ marginBottom: 16 }} onClick={handleExport}>
-            导出JSON
-          </Button>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <Button icon={<PlusOutlined />} onClick={() => handleZoom('in')} />
-            <Button icon={<MinusOutlined />} onClick={() => handleZoom('out')} />
-            <Button icon={<ExpandOutlined />} onClick={() => handleZoom('reset')} />
+          {/* 数据导入导出区 */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>数据导入导出</div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <Upload {...uploadProps}>
+                <Button icon={<UploadOutlined />} type="primary" style={{ width: '100%' }}>
+                  导入JSON
+                </Button>
+              </Upload>
+              <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExport}>
+                导出JSON
+              </Button>
+              <Upload {...bgImgUploadProps}>
+                <Button icon={<PictureOutlined />} style={{ width: '100%' }}>
+                  导入场地参考图
+                </Button>
+              </Upload>
+              <Button style={{ width: '100%' }} onClick={handleExportBgImgPoints}>
+                导出场地图点位
+              </Button>
+            </div>
           </div>
           <Divider />
           {/* Hierarchy 视图 */}
-          <Card title="动块层级（多选）" bordered={false} style={{ marginBottom: 16, maxHeight: 600, overflow: 'auto' }}>
+          <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>动块层级（多选）</div>
+          <Card bordered={false} style={{ marginBottom: 16, maxHeight: 600, overflow: 'auto' }}>
             <List
               dataSource={jsonData}
               renderItem={item => (
@@ -768,29 +1031,29 @@ const App: React.FC = () => {
               )}
             />
           </Card>
-          <Button icon={<RedoOutlined />} block style={{ marginBottom: 16 }} onClick={handleRotate} disabled={selectedIndices.length === 0}>
-            批量旋转15°
-          </Button>
           <Divider />
           {selectedIndices.length === 1 ? (
             (() => {
               const selectedBlock = jsonData.find(b => b.Index === selectedIndices[0]);
               return selectedBlock ? (
-                <Card title={`动块信息 #${selectedBlock.Index}`} bordered={false} style={{ marginBottom: 16 }}>
-                  <Text strong>名称：</Text>{selectedBlock.Name}<br />
-                  <Text strong>旋转：</Text>{selectedBlock.DeltaYaw}°<br />
-                  <Text strong>入口：</Text>({selectedBlock.Entrance.Point.X.toFixed(2)}, {selectedBlock.Entrance.Point.Y.toFixed(2)})<br />
-                  <Text strong>出口：</Text>({selectedBlock.Exit.Point.X.toFixed(2)}, {selectedBlock.Exit.Point.Y.toFixed(2)})<br />
-                  <Divider />
-                  <Text strong>顶点坐标：</Text>
-                  <ul style={{margin: 0, paddingLeft: 18}}>
-                    {selectedBlock.Points.map((p, idx) => (
-                      <li key={idx} style={{fontSize: 12}}>
-                        {`[${idx}] (${p.Point.X.toFixed(2)}, ${p.Point.Y.toFixed(2)})`}
-                      </li>
-                    ))}
-                  </ul>
-                </Card>
+                <div style={{ marginBottom: 16 }}>
+                  <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>{`动块信息 #${selectedBlock.Index}`}</div>
+                  <Card bordered={false}>
+                    <Text strong>名称：</Text>{selectedBlock.Name}<br />
+                    <Text strong>旋转：</Text>{selectedBlock.DeltaYaw}°<br />
+                    <Text strong>入口：</Text>({selectedBlock.Entrance.Point.X.toFixed(2)}, {selectedBlock.Entrance.Point.Y.toFixed(2)})<br />
+                    <Text strong>出口：</Text>({selectedBlock.Exit.Point.X.toFixed(2)}, {selectedBlock.Exit.Point.Y.toFixed(2)})<br />
+                    <Divider />
+                    <Text strong>顶点坐标：</Text>
+                    <ul style={{margin: 0, paddingLeft: 18}}>
+                      {selectedBlock.Points.map((p, idx) => (
+                        <li key={idx} style={{fontSize: 12}}>
+                          {`[${idx}] (${p.Point.X.toFixed(2)}, ${p.Point.Y.toFixed(2)})`}
+                        </li>
+                      ))}
+                    </ul>
+                  </Card>
+                </div>
               ) : null;
             })()
           ) : (
