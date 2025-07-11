@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import { Layout, Button, Upload, Card, Divider, Typography, message, List, Checkbox } from 'antd';
+import { Layout, Button, Upload, Card, Divider, Typography, message, List, Checkbox, Switch } from 'antd';
 import { UploadOutlined, DownloadOutlined, RedoOutlined, PlusOutlined, MinusOutlined, ExpandOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import 'antd/dist/reset.css';
@@ -45,6 +45,7 @@ const App: React.FC = () => {
   const jsonDataRef = useRef(jsonData);
   useEffect(() => { selectedIndicesRef.current = selectedIndices; }, [selectedIndices]);
   useEffect(() => { jsonDataRef.current = jsonData; }, [jsonData]);
+  const [moveSingleBlock, setMoveSingleBlock] = useState(true);
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -70,19 +71,26 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // 单击画布动块时同步多选，支持shift批量
+  // 单击画布动块时同步多选，支持shift批量和toggle
   const handleCanvasSelect = (index: number) => {
     setSelectedIndices(prev => {
       if (isShiftDown) {
         if (prev.includes(index)) return prev;
         return [...prev, index];
       } else {
-        if (prev.length > 1 && prev.includes(index)) {
-          // 多选状态下点击已选中的动块，保持多选不变
-          return prev;
+        if (moveSingleBlock) {
+          if (prev.length > 1 && prev.includes(index)) {
+            return prev;
+          } else {
+            return [index];
+          }
         } else {
-          // 点击未被选中的动块，切换为单选
-          return [index];
+          // 选中该幕的所有动块
+          const block = jsonData.find(b => b.Index === index);
+          if (!block) return prev;
+          const scene = (block.Name || '').split('-')[0];
+          const indices = jsonData.filter(b => (b.Name || '').split('-')[0] === scene).map(b => b.Index);
+          return indices;
         }
       }
     });
@@ -104,6 +112,7 @@ const App: React.FC = () => {
       maxY = Math.max(maxY, block.Entrance.Point.Y, block.Exit.Point.Y);
     });
     const container = pixiContainer.current;
+    const canvas = appRef.current?.view as HTMLCanvasElement;
     const canvasWidth = container?.clientWidth || 1200;
     const canvasHeight = container?.clientHeight || 800;
     let scale = 1;
@@ -128,8 +137,13 @@ const App: React.FC = () => {
     const canvas = document.createElement('canvas');
     // 动态获取容器宽高
     const container = pixiContainer.current;
-    const width = container?.clientWidth || 1200;
-    const height = container?.clientHeight || 800;
+    const getSize = () => {
+      return {
+        width: container?.clientWidth || window.innerWidth,
+        height: container?.clientHeight || window.innerHeight
+      };
+    };
+    const { width, height } = getSize();
     app = new PIXI.Application({
       view: canvas,
       width,
@@ -147,6 +161,12 @@ const App: React.FC = () => {
     blocksLayer.current.interactive = true;
     app.stage.addChild(blocksLayer.current as unknown as PIXI.DisplayObject);
     setPixiReady(true);
+    // 监听窗口resize
+    const handleResize = () => {
+      const { width, height } = getSize();
+      app.renderer.resize(width, height);
+    };
+    window.addEventListener('resize', handleResize);
     return () => {
       if (app) {
         app.destroy(true, { children: true });
@@ -154,6 +174,7 @@ const App: React.FC = () => {
       if (container) {
         container.innerHTML = '';
       }
+      window.removeEventListener('resize', handleResize);
     };
   }, []);
 
@@ -289,6 +310,7 @@ const App: React.FC = () => {
     const gridThickness = 1;
     // 画布像素范围
     const container = pixiContainer.current;
+    const canvas = appRef.current?.view as HTMLCanvasElement;
     const canvasWidth = container?.clientWidth || 1200;
     const canvasHeight = container?.clientHeight || 800;
     // 画布世界坐标范围
@@ -361,6 +383,93 @@ const App: React.FC = () => {
       app.stage.off('pointerupoutside', handlePointerUp);
     };
   }, [jsonData, selectedIndices, pixiReady, viewTransform]);
+
+  // 鼠标滚轮缩放和右键平移（用ref保证状态同步）
+  useEffect(() => {
+    const container = pixiContainer.current;
+    if (!container) return;
+    const app = appRef.current;
+    if (!app) return;
+    const canvas = app.view as HTMLCanvasElement;
+    const isPanningRef = { current: false };
+    const panStartRef = { x: 0, y: 0, offsetX: 0, offsetY: 0 };
+    // 滚轮缩放
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      let scale = viewTransform.scale;
+      const minScale = 0.05, maxScale = 10;
+      const zoomFactor = 1.1;
+      const mouseX = e.offsetX;
+      const mouseY = e.offsetY;
+      let newScale = scale;
+      if (e.deltaY < 0) {
+        newScale = Math.min(scale * zoomFactor, maxScale);
+      } else {
+        newScale = Math.max(scale / zoomFactor, minScale);
+      }
+      const worldX = (mouseX - viewTransform.offsetX) / scale;
+      const worldY = (mouseY - viewTransform.offsetY) / scale;
+      const newOffsetX = mouseX - worldX * newScale;
+      const newOffsetY = mouseY - worldY * newScale;
+      setViewTransform(vt => ({ ...vt, scale: newScale, offsetX: newOffsetX, offsetY: newOffsetY }));
+    };
+    // 右键平移（Pointer Events）
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button === 2) {
+        e.preventDefault();
+        isPanningRef.current = true;
+        panStartRef.x = e.clientX;
+        panStartRef.y = e.clientY;
+        panStartRef.offsetX = viewTransform.offsetX;
+        panStartRef.offsetY = viewTransform.offsetY;
+        window.addEventListener('pointermove', handlePointerMove);
+        window.addEventListener('pointerup', handlePointerUp);
+        canvas.style.cursor = 'grabbing';
+        return false;
+      }
+    };
+    // pointermove和pointerup移到window级别
+    const handlePointerMove = (e: PointerEvent) => {
+      if (isPanningRef.current) {
+        const dx = e.clientX - panStartRef.x;
+        const dy = e.clientY - panStartRef.y;
+        setViewTransform(vt => {
+          const newOffsetX = panStartRef.offsetX + dx;
+          const newOffsetY = panStartRef.offsetY + dy;
+          console.log('画布平移调试 offsetX:', newOffsetX, 'offsetY:', newOffsetY);
+          return { ...vt, offsetX: newOffsetX, offsetY: newOffsetY };
+        });
+        canvas.style.cursor = 'grabbing';
+        e.preventDefault();
+        return false;
+      }
+    };
+    const handlePointerUp = (e: PointerEvent) => {
+      if (isPanningRef.current && e.button === 2) {
+        isPanningRef.current = false;
+        window.removeEventListener('pointermove', handlePointerMove);
+        window.removeEventListener('pointerup', handlePointerUp);
+        canvas.style.cursor = '';
+        e.preventDefault();
+        return false;
+      }
+    };
+    const handleContextMenu = (e: MouseEvent) => {
+      e.preventDefault();
+      return false;
+    };
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas.addEventListener('pointerdown', handlePointerDown);
+    // pointermove和pointerup监听去掉canvas级别
+    canvas.addEventListener('contextmenu', handleContextMenu);
+    return () => {
+      canvas.removeEventListener('wheel', handleWheel);
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      // pointermove和pointerup监听去掉canvas级别
+      canvas.removeEventListener('contextmenu', handleContextMenu);
+      canvas.style.cursor = '';
+    };
+  }, [viewTransform]);
 
   // antd文件上传props
   const uploadProps: UploadProps = {
@@ -564,6 +673,10 @@ const App: React.FC = () => {
     <Layout style={{ minHeight: '100vh' }}>
       <Sider width={320} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2' }}>
         <div style={{ padding: 24 }}>
+          <div style={{ marginBottom: 16 }}>
+            <Switch checked={moveSingleBlock} onChange={setMoveSingleBlock} style={{ marginRight: 8 }} />
+            <span>可以移动单独动块</span>
+          </div>
           <Title level={3} style={{ marginBottom: 24 }}>动块编辑器</Title>
           <Upload {...uploadProps}>
             <Button icon={<UploadOutlined />} block type="primary" style={{ marginBottom: 16 }}>
