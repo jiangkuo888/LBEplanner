@@ -1,46 +1,89 @@
-# Getting Started with Create React App
+# WebGL动块编辑器项目 PRD
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+## 一、项目背景与目标
 
-## Available Scripts
+本项目旨在开发一个基于WebGL的可视化编辑器，能够读取`Json/Input/PlayArea_0.json`文件，根据其中的数据动态生成和编辑多边形区域（称为“动块”）。该编辑器将为后续的关卡设计、路径规划等功能提供基础的可视化支持。
 
-In the project directory, you can run:
+## 二、核心功能
 
-### `npm start`
+1. **数据读取与解析**
+   - 读取`Json/Input/PlayArea_0.json`文件。
+   - 解析文件中的动块数据，包括多边形顶点、入口、出口、旋转等信息。
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+2. **动块可视化**
+   - 根据每个动块的`Points`字段绘制多边形。
+   - 按`Index`编号区分和管理动块。
+   - 显示每个动块的`Entrance`（入口）和`Exit`（出口）点。
+   - 支持显示`DeltaYaw`（旋转角度），并在可视化时正确应用。
+   - 画布自适应所有动块边界，支持手动缩放和重置缩放。
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
+3. **交互与编辑**
+   - 支持选择、拖拽、旋转动块。
+   - 支持编辑多边形顶点、入口、出口位置（计划中）。
+   - 支持保存编辑后的数据为新的JSON文件。
 
-### `npm test`
+4. **辅助功能**
+   - 动块高亮、编号显示。
+   - 视图缩放、平移（已支持缩放，平移计划中）。
+   - 支持撤销/重做（计划中）。
+   - 现代化UI界面（Ant Design美化，功能区与画布分栏）。
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+## 三、数据结构说明
 
-### `npm run build`
+以`PlayArea_0.json`为例，动块数据结构如下：
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+```json
+{
+  "Name": "1-1",           // 动块名称
+  "Index": 0,               // 动块编号
+  "Points": [               // 多边形顶点数组
+    { "Point": { "X": -281.9, "Y": 399.2 } },
+    ...
+  ],
+  "Entrance": {             // 入口点
+    "Point": { "X": -179.99, "Y": 549.20 }
+  },
+  "Exit": {                 // 出口点
+    "Point": { "X": -179.99, "Y": 564.20 }
+  },
+  "DeltaYaw": 0             // 旋转角度（度）
+}
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+- `Points`：定义多边形的顶点，顺序连接形成闭合区域。
+- `Entrance`/`Exit`：分别为入口和出口的坐标点。
+- `DeltaYaw`：该动块的旋转角度，单位为度。
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+## 四、核心交互流程
 
-### `npm run eject`
+1. 启动编辑器 → 选择/自动加载`PlayArea_0.json` → 解析并渲染所有动块（自适应画布）。
+2. 用户选择动块 → 显示高亮、编号、入口/出口。
+3. 用户编辑动块（拖拽、旋转、编辑顶点/入口/出口）。
+4. 用户可手动缩放/重置视图。
+5. 保存 → 导出为新的JSON文件。
 
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
+## 五、技术选型
 
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+- 前端框架：React
+- 渲染引擎：PixiJS
+- UI框架：Ant Design
+- 数据处理：TypeScript
+- 文件操作：File API
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
+## 六、当前进展与后续计划
 
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
+- [x] 数据读取与解析
+- [x] 动块可视化（多边形、编号、入口/出口、旋转）
+- [x] 选择、拖拽、旋转动块
+- [x] 编辑后导出JSON
+- [x] 动块高亮、编号显示
+- [x] 画布自适应、手动缩放、重置缩放
+- [x] 现代化UI（Ant Design）
+- [x] 画布右键拖拽平移支持全局监听，优化为无限平移，提升用户体验
+- [ ] 编辑多边形顶点、入口、出口位置
+- [ ] 视图平移
+- [ ] 撤销/重做
 
-## Learn More
+---
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
+> 本PRD为WebGL动块编辑器的持续迭代文档，后续可根据实际开发和用户反馈持续完善。 
