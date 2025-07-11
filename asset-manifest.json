@@ -1,15 +1,15 @@
 {
   "files": {
-    "main.css": "/webgl-editor/static/css/main.c4651efe.css",
-    "main.js": "/webgl-editor/static/js/main.c45a59d3.js",
-    "static/js/453.ef5eb3df.chunk.js": "/webgl-editor/static/js/453.ef5eb3df.chunk.js",
-    "index.html": "/webgl-editor/index.html",
-    "main.c4651efe.css.map": "/webgl-editor/static/css/main.c4651efe.css.map",
-    "main.c45a59d3.js.map": "/webgl-editor/static/js/main.c45a59d3.js.map",
-    "453.ef5eb3df.chunk.js.map": "/webgl-editor/static/js/453.ef5eb3df.chunk.js.map"
+    "main.css": "/LBEplanner/static/css/main.c4651efe.css",
+    "main.js": "/LBEplanner/static/js/main.df0416fe.js",
+    "static/js/453.ef5eb3df.chunk.js": "/LBEplanner/static/js/453.ef5eb3df.chunk.js",
+    "index.html": "/LBEplanner/index.html",
+    "main.c4651efe.css.map": "/LBEplanner/static/css/main.c4651efe.css.map",
+    "main.df0416fe.js.map": "/LBEplanner/static/js/main.df0416fe.js.map",
+    "453.ef5eb3df.chunk.js.map": "/LBEplanner/static/js/453.ef5eb3df.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.c4651efe.css",
-    "static/js/main.c45a59d3.js"
+    "static/js/main.df0416fe.js"
   ]
 }
