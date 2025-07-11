@@ -45,7 +45,9 @@ const App: React.FC = () => {
   const jsonDataRef = useRef(jsonData);
   useEffect(() => { selectedIndicesRef.current = selectedIndices; }, [selectedIndices]);
   useEffect(() => { jsonDataRef.current = jsonData; }, [jsonData]);
-  const [moveSingleBlock, setMoveSingleBlock] = useState(true);
+  const [moveSingleBlock, setMoveSingleBlock] = useState(false);
+  const [showEntrance, setShowEntrance] = useState(false); // 默认隐藏入口
+  const [showExit, setShowExit] = useState(false); // 默认隐藏出口
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -205,6 +207,63 @@ const App: React.FC = () => {
     sceneList.forEach((scene, idx) => {
       sceneColorMap[scene] = COLORS[idx % COLORS.length];
     });
+    // 新增：如果当前选中的是同一幕的所有动块，则在这些动块的中心点绘制幕名
+    if (selectedIndices.length > 0) {
+      // 获取选中动块的幕号
+      const selectedBlocks = jsonData.filter(b => selectedIndices.includes(b.Index));
+      const selectedScene = selectedBlocks.length > 0 ? (selectedBlocks[0].Name || '').split('-')[0] : null;
+      const allSameScene = selectedBlocks.every(b => (b.Name || '').split('-')[0] === selectedScene);
+      // 幕内所有动块都被选中才显示
+      const allSceneIndices = jsonData.filter(b => (b.Name || '').split('-')[0] === selectedScene).map(b => b.Index);
+      const allSceneSelected = allSceneIndices.length > 0 && allSceneIndices.every(idx => selectedIndices.includes(idx)) && selectedIndices.length === allSceneIndices.length;
+      if (allSameScene && allSceneSelected) {
+        // 计算所有选中动块所有点的中心点
+        let allPoints: { x: number, y: number }[] = [];
+        selectedBlocks.forEach(b => {
+          b.Points.forEach(p => allPoints.push({ x: p.Point.X, y: p.Point.Y }));
+        });
+        if (allPoints.length > 0) {
+          const centerX = allPoints.reduce((sum, p) => sum + p.x, 0) / allPoints.length;
+          const centerY = allPoints.reduce((sum, p) => sum + p.y, 0) / allPoints.length;
+          const sceneText = new PIXI.Text(selectedScene || '', {
+            fontSize: 96,
+            fill: 0xffeb3b,
+            fontWeight: 'bold',
+            align: 'center',
+            stroke: 0x000000,
+            strokeThickness: 6
+          });
+          sceneText.anchor.set(0.5);
+          sceneText.x = centerX * scale + offsetX;
+          sceneText.y = centerY * scale + offsetY;
+          layer.addChild(sceneText as unknown as PIXI.DisplayObject);
+        }
+        // 新增：为每个动块中心点上方绘制该动块的名字
+        selectedBlocks.forEach(b => {
+          // 计算动块中心点
+          const points = b.Points.map(p => [p.Point.X, p.Point.Y]).flat();
+          let centerX = 0, centerY = 0;
+          points.forEach((v, idx) => {
+            if (idx % 2 === 0) centerX += v;
+            else centerY += v;
+          });
+          centerX /= b.Points.length;
+          centerY /= b.Points.length;
+          const nameText = new PIXI.Text(b.Name || '', {
+            fontSize: 32,
+            fill: 0xffffff,
+            fontWeight: 'bold',
+            align: 'center',
+            stroke: 0x000000,
+            strokeThickness: 4
+          });
+          nameText.anchor.set(0.5, 1);
+          nameText.x = centerX * scale + offsetX;
+          nameText.y = centerY * scale + offsetY - 40; // 上方偏移
+          layer.addChild(nameText as unknown as PIXI.DisplayObject);
+        });
+      }
+    }
     jsonData.forEach((block, i) => {
       const points = block.Points.map(p => [p.Point.X, p.Point.Y]).flat();
       let centerX = 0, centerY = 0;
@@ -251,17 +310,6 @@ const App: React.FC = () => {
         };
       });
       layer.addChild(poly as unknown as PIXI.DisplayObject);
-      const text = new PIXI.Text(block.Index.toString(), {
-        fontSize: 22,
-        fill: 0xffffff,
-        fontWeight: 'bold',
-        align: 'center',
-        stroke: 0x000000,
-      });
-      text.anchor.set(0.5);
-      text.x = centerX * scale + offsetX;
-      text.y = centerY * scale + offsetY;
-      layer.addChild(text as unknown as PIXI.DisplayObject);
       const drawPoint = (pt: Point, color: number, label: string) => {
         const g = new PIXI.Graphics();
         g.beginFill(color, 1).drawCircle(pt.X * scale + offsetX, pt.Y * scale + offsetY, 10).endFill();
@@ -272,8 +320,8 @@ const App: React.FC = () => {
         t.y = pt.Y * scale + offsetY - 18;
         layer.addChild(t as unknown as PIXI.DisplayObject);
       };
-      drawPoint(block.Entrance.Point, 0x00e676, '入口');
-      drawPoint(block.Exit.Point, 0xff1744, '出口');
+      if (showEntrance) drawPoint(block.Entrance.Point, 0x00e676, '入口');
+      if (showExit) drawPoint(block.Exit.Point, 0xff1744, '出口');
     });
     // 在画布中心(0,0)绘制十字和标签，确保在最上层
     const crossLen = 30;
@@ -382,7 +430,7 @@ const App: React.FC = () => {
       app.stage.off('pointerup', handlePointerUp);
       app.stage.off('pointerupoutside', handlePointerUp);
     };
-  }, [jsonData, selectedIndices, pixiReady, viewTransform]);
+  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit]);
 
   // 鼠标滚轮缩放和右键平移（用ref保证状态同步）
   useEffect(() => {
@@ -673,9 +721,19 @@ const App: React.FC = () => {
     <Layout style={{ minHeight: '100vh' }}>
       <Sider width={320} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2' }}>
         <div style={{ padding: 24 }}>
-          <div style={{ marginBottom: 16 }}>
-            <Switch checked={moveSingleBlock} onChange={setMoveSingleBlock} style={{ marginRight: 8 }} />
-            <span>可以移动单独动块</span>
+          <div style={{ marginBottom: 16, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div>
+              <Switch checked={moveSingleBlock} onChange={setMoveSingleBlock} style={{ marginRight: 8 }} />
+              <span>可以移动单独动块</span>
+            </div>
+            <div>
+              <Switch checked={showEntrance} onChange={setShowEntrance} style={{ marginRight: 8 }} />
+              <span>显示入口</span>
+            </div>
+            <div>
+              <Switch checked={showExit} onChange={setShowExit} style={{ marginRight: 8 }} />
+              <span>显示出口</span>
+            </div>
           </div>
           <Title level={3} style={{ marginBottom: 24 }}>动块编辑器</Title>
           <Upload {...uploadProps}>
