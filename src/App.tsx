@@ -754,10 +754,16 @@ const App: React.FC = () => {
               const jsonReader = new FileReader();
               jsonReader.onload = (evt) => {
                 try {
-                  const points = JSON.parse(evt.target?.result as string);
-                  if (Array.isArray(points) && points.every(p => typeof p.x === 'number' && typeof p.y === 'number')) {
-                    setBgImgPoints(points);
+                  const obj = JSON.parse(evt.target?.result as string);
+                  // 兼容老格式（数组）和新格式（带scale和points）
+                  if (Array.isArray(obj)) {
+                    setBgImgPoints(obj);
                     message.success('场地图点位已自动导入');
+                  } else if (obj && Array.isArray(obj.points)) {
+                    setBgImgPoints(obj.points);
+                    // 自动设置scale
+                    setBackgroundImage(prev => prev ? { ...prev, scale: typeof obj.scale === 'number' ? obj.scale : prev.scale } : prev);
+                    message.success('场地图点位及缩放已自动导入');
                   } else {
                     message.error('点位JSON格式不正确');
                   }
@@ -1042,7 +1048,12 @@ const App: React.FC = () => {
 
   // 导出场地图点位
   const handleExportBgImgPoints = () => {
-    const dataStr = JSON.stringify(bgImgPoints, null, 2);
+    // 导出时包含scale字段
+    const exportObj = {
+      scale: backgroundImage?.scale ?? 1,
+      points: bgImgPoints
+    };
+    const dataStr = JSON.stringify(exportObj, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1083,22 +1094,26 @@ const App: React.FC = () => {
           <div style={{ marginBottom: 24 }}>
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>数据导入导出</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <Upload {...uploadProps}>
-                <Button icon={<UploadOutlined />} type="primary" style={{ width: '100%' }}>
-                  导入JSON
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Upload {...uploadProps} style={{ flex: 1 }}>
+                  <Button icon={<UploadOutlined />} type="primary" style={{ width: '100%' }}>
+                    导入JSON
+                  </Button>
+                </Upload>
+                <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExport}>
+                  导出JSON
                 </Button>
-              </Upload>
-              <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExport}>
-                导出JSON
-              </Button>
-              <Upload {...bgImgUploadProps}>
-                <Button icon={<PictureOutlined />} style={{ width: '100%' }}>
-                  导入场地参考图
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Upload {...bgImgUploadProps} style={{ flex: 1 }}>
+                  <Button icon={<PictureOutlined />} style={{ width: '100%' }}>
+                    导入场地参考图
+                  </Button>
+                </Upload>
+                <Button style={{ width: '100%' }} onClick={handleExportBgImgPoints}>
+                  导出场地图点位
                 </Button>
-              </Upload>
-              <Button style={{ width: '100%' }} onClick={handleExportBgImgPoints}>
-                导出场地图点位
-              </Button>
+              </div>
             </div>
           </div>
           <Divider />
