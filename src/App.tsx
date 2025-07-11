@@ -172,6 +172,8 @@ const App: React.FC = () => {
     blocksLayer.current.interactive = true;
     app.stage.addChild(blocksLayer.current as unknown as PIXI.DisplayObject);
     setPixiReady(true);
+    // 画布中心点正好是(0,0)
+    setViewTransform({ scale: 1, offsetX: width / 2, offsetY: height / 2 });
     // 监听窗口resize
     const handleResize = () => {
       const { width, height } = getSize();
@@ -199,55 +201,106 @@ const App: React.FC = () => {
     if (backgroundImage && backgroundImage.texture) {
       const sprite = new PIXI.Sprite(backgroundImage.texture);
       sprite.anchor.set(0.5);
+      // 检查图片渲染，确保scale叠加viewTransform
       sprite.x = backgroundImage.x * scale + offsetX;
       sprite.y = backgroundImage.y * scale + offsetY;
       sprite.scale.set(backgroundImage.scale * scale, backgroundImage.scale * scale);
       sprite.rotation = backgroundImage.rotation;
-      sprite.alpha = 0.3;
-      sprite.interactive = true;
-      sprite.cursor = bgImgSelected ? 'move' : 'pointer';
-      sprite.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
-        if (bgImgSelected && enableBgImgPoint) {
-          // 计算点击点的图片本地坐标
-          const globalX = (event.global.x - offsetX) / scale;
-          const globalY = (event.global.y - offsetY) / scale;
-          // 逆变换：先平移，再缩放，再旋转
-          const dx = globalX - backgroundImage.x;
-          const dy = globalY - backgroundImage.y;
-          const r = -backgroundImage.rotation;
-          const sx = 1 / backgroundImage.scale;
-          const localX = (dx * Math.cos(r) - dy * Math.sin(r)) * sx;
-          const localY = (dx * Math.sin(r) + dy * Math.cos(r)) * sx;
-          setBgImgPoints(prev => {
-            if (prev.length > 0) {
-              const first = prev[0];
-              // 判断是否点击到第一个点（距离小于10像素）
-              const dist = Math.sqrt(Math.pow(localX - first.x, 2) + Math.pow(localY - first.y, 2));
-              if (dist < 10) {
-                // 闭合路径，添加第一个点为最后一个点
-                setEnableBgImgPoint(false);
-                return [...prev, { x: first.x, y: first.y }];
-              }
-            }
-            return [...prev, { x: localX, y: localY }];
-          });
-        } else {
-          setBgImgSelected(true);
-          setBgImgDragging(true);
-          setBgImgDragOffset({
-            x: (event.global.x - offsetX) / scale - backgroundImage.x,
-            y: (event.global.y - offsetY) / scale - backgroundImage.y,
-          });
+      sprite.alpha = enableBgImgPoint ? 0.3 : 0.05;
+      // 判断点位是否闭合
+      let isClosed = false;
+      if (bgImgPoints.length > 1) {
+        const first = bgImgPoints[0];
+        const last = bgImgPoints[bgImgPoints.length - 1];
+        if (Math.abs(first.x - last.x) < 1e-6 && Math.abs(first.y - last.y) < 1e-6) {
+          isClosed = true;
         }
-      });
+      }
+      sprite.interactive = !!enableBgImgPoint;
+      sprite.cursor = enableBgImgPoint ? (bgImgSelected ? 'move' : 'pointer') : 'default';
+      if (enableBgImgPoint) {
+        sprite.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
+          if (!isClosed && enableBgImgPoint && event.button === 0) {
+            // 允许直接打点（不需要bgImgSelected为true）
+            const globalX = (event.global.x - offsetX) / scale;
+            const globalY = (event.global.y - offsetY) / scale;
+            const dx = globalX - backgroundImage.x;
+            const dy = globalY - backgroundImage.y;
+            const r = -backgroundImage.rotation;
+            const sx = 1 / backgroundImage.scale;
+            const localX = (dx * Math.cos(r) - dy * Math.sin(r)) * sx;
+            const localY = (dx * Math.sin(r) + dy * Math.cos(r)) * sx;
+            setBgImgPoints(prev => {
+              if (prev.length > 1) {
+                const first = prev[0];
+                const last = prev[prev.length - 1];
+                if (Math.abs(first.x - last.x) < 1e-6 && Math.abs(first.y - last.y) < 1e-6) {
+                  return prev;
+                }
+              }
+              if (prev.length > 0) {
+                const first = prev[0];
+                const dist = Math.sqrt(Math.pow(localX - first.x, 2) + Math.pow(localY - first.y, 2));
+                if (dist < 10) {
+                  return [...prev, { x: first.x, y: first.y }];
+                }
+              }
+              return [...prev, { x: localX, y: localY }];
+            });
+          } else if (isClosed && event.button === 0) {
+            // 已闭合，允许选中并拖拽图片
+            setBgImgSelected(true);
+            setBgImgDragging(true);
+            const mx = (event.global.x - offsetX) / scale;
+            const my = (event.global.y - offsetY) / scale;
+            setBgImgDragOffset({
+              x: mx - backgroundImage.x,
+              y: my - backgroundImage.y,
+            });
+          }
+        });
+      }
       layer.addChild(sprite as unknown as PIXI.DisplayObject);
+      // 高亮描边：选中且已闭合时
+      if (bgImgSelected && isClosed) {
+        // 计算图片四个角的画布坐标
+        const w = backgroundImage.texture.width * backgroundImage.scale;
+        const h = backgroundImage.texture.height * backgroundImage.scale;
+        const corners = [
+          { x: -w / 2, y: -h / 2 },
+          { x:  w / 2, y: -h / 2 },
+          { x:  w / 2, y:  h / 2 },
+          { x: -w / 2, y:  h / 2 }
+        ];
+        const pts = corners.map(pt => {
+          // 图片自身旋转
+          const rx = pt.x * Math.cos(backgroundImage.rotation) - pt.y * Math.sin(backgroundImage.rotation);
+          const ry = pt.x * Math.sin(backgroundImage.rotation) + pt.y * Math.cos(backgroundImage.rotation);
+          // 图片自身平移
+          const wx = backgroundImage.x + rx;
+          const wy = backgroundImage.y + ry;
+          // 画布viewTransform
+          return {
+            x: wx * scale + offsetX,
+            y: wy * scale + offsetY
+          };
+        });
+        const border = new PIXI.Graphics();
+        border.lineStyle(6, 0xffeb3b, 0.8)
+          .moveTo(pts[0].x, pts[0].y)
+          .lineTo(pts[1].x, pts[1].y)
+          .lineTo(pts[2].x, pts[2].y)
+          .lineTo(pts[3].x, pts[3].y)
+          .closePath();
+        layer.addChild(border as unknown as PIXI.DisplayObject);
+      }
       // 渲染打点和连线
       if (bgImgPoints.length > 0) {
         // 画线
         for (let i = 1; i < bgImgPoints.length; i++) {
           const p1 = bgImgPoints[i - 1];
           const p2 = bgImgPoints[i];
-          // 变换到图片世界坐标（不乘viewTransform.scale和offset）
+          // 变换到图片世界坐标（只受图片自身scale/rotation/position影响，不含viewTransform）
           const toWorld = (pt: {x: number, y: number}) => {
             const sx = pt.x * backgroundImage.scale;
             const sy = pt.y * backgroundImage.scale;
@@ -258,13 +311,13 @@ const App: React.FC = () => {
               y: backgroundImage.y + ry,
             };
           };
-          const w1 = toWorld(p1);
-          const w2 = toWorld(p2);
-          // 渲染用的画布坐标
+          // 画布坐标（叠加viewTransform）
           const toCanvas = (pt: {x: number, y: number}) => ({
             x: pt.x * scale + offsetX,
             y: pt.y * scale + offsetY,
           });
+          const w1 = toWorld(p1);
+          const w2 = toWorld(p2);
           const c1 = toCanvas(w1);
           const c2 = toCanvas(w2);
           const line = new PIXI.Graphics();
@@ -272,7 +325,7 @@ const App: React.FC = () => {
             .moveTo(c1.x, c1.y)
             .lineTo(c2.x, c2.y);
           layer.addChild(line as unknown as PIXI.DisplayObject);
-          // 距离（图片世界坐标系）
+          // 距离（只用图片世界坐标，不含viewTransform）
           const dist = Math.sqrt(Math.pow(w2.x - w1.x, 2) + Math.pow(w2.y - w1.y, 2));
           const mid = { x: (w1.x + w2.x) / 2, y: (w1.y + w2.y) / 2 };
           const cmid = toCanvas(mid);
@@ -292,18 +345,19 @@ const App: React.FC = () => {
         // 画点
         for (let i = 0; i < bgImgPoints.length; i++) {
           const pt = bgImgPoints[i];
-          const wpt = ((pt: {x: number, y: number}) => {
-            const sx = pt.x * backgroundImage.scale;
-            const sy = pt.y * backgroundImage.scale;
-            const rx = sx * Math.cos(backgroundImage.rotation) - sy * Math.sin(backgroundImage.rotation);
-            const ry = sx * Math.sin(backgroundImage.rotation) + sy * Math.cos(backgroundImage.rotation);
-            return {
-              x: backgroundImage.x + rx,
-              y: backgroundImage.y + ry,
-            };
-          })(pt);
+          // 变换到图片世界坐标
+          const sx = pt.x * backgroundImage.scale;
+          const sy = pt.y * backgroundImage.scale;
+          const rx = sx * Math.cos(backgroundImage.rotation) - sy * Math.sin(backgroundImage.rotation);
+          const ry = sx * Math.sin(backgroundImage.rotation) + sy * Math.cos(backgroundImage.rotation);
+          const wx = backgroundImage.x + rx;
+          const wy = backgroundImage.y + ry;
+          // 再变换到画布坐标
+          const cx = wx * scale + offsetX;
+          const cy = wy * scale + offsetY;
           const g = new PIXI.Graphics();
-          g.beginFill(0xff1744, 1).drawCircle(wpt.x, wpt.y, 8).endFill();
+          g.beginFill(0xff1744, 1).drawCircle(cx, cy, 8).endFill();
+          g.interactive = false;
           layer.addChild(g as unknown as PIXI.DisplayObject);
         }
       }
@@ -554,6 +608,13 @@ const App: React.FC = () => {
     };
   }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint]);
 
+  // 监听打点功能开关，关闭时自动取消图片选中
+  useEffect(() => {
+    if (!enableBgImgPoint) {
+      setBgImgSelected(false);
+    }
+  }, [enableBgImgPoint]);
+
   // 鼠标滚轮缩放和右键平移（用ref保证状态同步）
   useEffect(() => {
     const container = pixiContainer.current;
@@ -674,7 +735,7 @@ const App: React.FC = () => {
       reader.onload = (event) => {
         const url = event.target?.result as string;
         const texture = PIXI.Texture.from(url);
-        // 场地参考图中心点对齐到场地锚点(0,0)，初始缩放适配画布宽度
+        // 居中显示，初始缩放适配画布宽度
         const container = pixiContainer.current;
         const canvasWidth = container?.clientWidth || 1200;
         const canvasHeight = container?.clientHeight || 800;
@@ -682,6 +743,34 @@ const App: React.FC = () => {
         img.onload = () => {
           const scale = Math.min(canvasWidth / img.width, canvasHeight / img.height) * 0.8;
           setBackgroundImage({ texture, x: 0, y: 0, scale, rotation: 0 });
+          // 弹窗选择同名json
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'application/json';
+          input.style.display = 'none';
+          input.onchange = (e) => {
+            const jsonFile = (e.target as HTMLInputElement).files?.[0];
+            if (jsonFile) {
+              const jsonReader = new FileReader();
+              jsonReader.onload = (evt) => {
+                try {
+                  const points = JSON.parse(evt.target?.result as string);
+                  if (Array.isArray(points) && points.every(p => typeof p.x === 'number' && typeof p.y === 'number')) {
+                    setBgImgPoints(points);
+                    message.success('场地图点位已自动导入');
+                  } else {
+                    message.error('点位JSON格式不正确');
+                  }
+                } catch {
+                  message.error('点位JSON解析失败');
+                }
+              };
+              jsonReader.readAsText(jsonFile);
+            }
+          };
+          document.body.appendChild(input);
+          input.click();
+          setTimeout(() => document.body.removeChild(input), 1000);
         };
         img.src = url;
       };
@@ -876,9 +965,10 @@ const App: React.FC = () => {
     // 拖拽
     const handlePointerMove = (e: PointerEvent) => {
       if (bgImgDragging && bgImgDragOffset) {
-        const dx = (e.clientX - container.getBoundingClientRect().left) / viewTransform.scale - bgImgDragOffset.x;
-        const dy = (e.clientY - container.getBoundingClientRect().top) / viewTransform.scale - bgImgDragOffset.y;
-        setBackgroundImage(prev => prev ? { ...prev, x: dx, y: dy } : prev);
+        // 统一用 viewTransform 计算（与动块一致）
+        const mx = (e.clientX - container.getBoundingClientRect().left - viewTransform.offsetX) / viewTransform.scale;
+        const my = (e.clientY - container.getBoundingClientRect().top - viewTransform.offsetY) / viewTransform.scale;
+        setBackgroundImage(prev => prev ? { ...prev, x: mx - bgImgDragOffset.x, y: my - bgImgDragOffset.y } : prev);
       }
     };
     const handlePointerUp = () => {
