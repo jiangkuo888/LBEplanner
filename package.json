@@ -2,6 +2,7 @@
   "name": "webgl-editor",
   "version": "0.1.0",
   "private": true,
+  "homepage": "https://yourname.github.io/webgl-editor",
   "dependencies": {
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",
@@ -12,6 +13,7 @@
     "@types/react": "^19.1.8",
     "@types/react-dom": "^19.1.6",
     "antd": "^5.26.4",
+    "gh-pages": "^6.3.0",
     "pixi.js": "^7.2.4",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
@@ -23,7 +25,9 @@
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "predeploy": "npm run build",
+    "deploy": "gh-pages -d build"
   },
   "eslintConfig": {
     "extends": [
