@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import { Layout, Button, Upload, Card, Divider, Typography, message } from 'antd';
+import { Layout, Button, Upload, Card, Divider, Typography, message, List, Checkbox } from 'antd';
 import { UploadOutlined, DownloadOutlined, RedoOutlined, PlusOutlined, MinusOutlined, ExpandOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import 'antd/dist/reset.css';
@@ -36,6 +36,57 @@ const App: React.FC = () => {
   const [pixiReady, setPixiReady] = useState(false);
   const dragInfo = useRef<{ blockIndex: number; offset: { x: number; y: number } } | null>(null);
   const [viewTransform, setViewTransform] = useState<{ scale: number; offsetX: number; offsetY: number }>({ scale: 1, offsetX: 0, offsetY: 0 });
+  const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
+  const [isShiftDown, setIsShiftDown] = useState(false);
+  const rotateTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const rotateDelayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isRDownRef = useRef(false);
+  const selectedIndicesRef = useRef(selectedIndices);
+  const jsonDataRef = useRef(jsonData);
+  useEffect(() => { selectedIndicesRef.current = selectedIndices; }, [selectedIndices]);
+  useEffect(() => { jsonDataRef.current = jsonData; }, [jsonData]);
+
+  // 多选逻辑
+  const handleSelectBlock = (index: number, checked: boolean) => {
+    setSelectedIndices(prev => {
+      if (checked) return [...prev, index];
+      return prev.filter(i => i !== index);
+    });
+  };
+
+  // 监听shift键状态
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftDown(true);
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftDown(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+    };
+  }, []);
+
+  // 单击画布动块时同步多选，支持shift批量
+  const handleCanvasSelect = (index: number) => {
+    setSelectedIndices(prev => {
+      if (isShiftDown) {
+        if (prev.includes(index)) return prev;
+        return [...prev, index];
+      } else {
+        if (prev.length > 1 && prev.includes(index)) {
+          // 多选状态下点击已选中的动块，保持多选不变
+          return prev;
+        } else {
+          // 点击未被选中的动块，切换为单选
+          return [index];
+        }
+      }
+    });
+  };
 
   // 只在导入JSON后适配一次包围盒
   const fitViewToBlocks = (blocks: BlockData[]) => {
@@ -112,6 +163,27 @@ const App: React.FC = () => {
     if (!layer) return;
     layer.removeChildren();
     const { scale, offsetX, offsetY } = viewTransform;
+    // 计算所有动块的幕号到颜色的映射，并校验Name格式
+    const sceneColorMap: Record<string, number> = {};
+    let sceneList: string[] = [];
+    let invalidBlockName: string | null = null;
+    jsonData.forEach(block => {
+      const nameParts = (block.Name || '').split('-');
+      if (!block.Name || nameParts.length < 2 || !/^\d+$/.test(nameParts[0])) {
+        invalidBlockName = block.Name;
+      }
+      const scene = nameParts[0];
+      if (!sceneList.includes(scene)) sceneList.push(scene);
+    });
+    if (invalidBlockName) {
+      setTimeout(() => {
+        window.alert(`动块名称“${invalidBlockName}”无法解析出幕号（应为“数字-...”格式），请检查数据！`);
+      }, 0);
+      return;
+    }
+    sceneList.forEach((scene, idx) => {
+      sceneColorMap[scene] = COLORS[idx % COLORS.length];
+    });
     jsonData.forEach((block, i) => {
       const points = block.Points.map(p => [p.Point.X, p.Point.Y]).flat();
       let centerX = 0, centerY = 0;
@@ -133,19 +205,20 @@ const App: React.FC = () => {
         };
       });
       const poly = new PIXI.Graphics();
-      const isSelected = selectedIndex === block.Index;
+      const isSelected = selectedIndices.includes(block.Index);
       poly.interactive = true;
       (poly as any).buttonMode = true;
+      const scene = (block.Name || '').split('-')[0];
+      const color = sceneColorMap[scene] || COLORS[i % COLORS.length];
       poly.lineStyle(isSelected ? 5 : 2, isSelected ? 0xffeb3b : 0xffffff, 0.9)
-        .beginFill(COLORS[i % COLORS.length], isSelected ? 0.7 : 0.4)
+        .beginFill(color, isSelected ? 0.35 : 0.2)
         .moveTo(rotated[0].x, rotated[0].y);
       rotated.forEach((pt, idx) => {
         if (idx > 0) poly.lineTo(pt.x, pt.y);
       });
       poly.closePath().endFill();
       poly.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
-        setSelectedIndex(block.Index);
-        setSelectedBlock(block);
+        handleCanvasSelect(block.Index);
         const mx = (event.global.x - offsetX) / scale;
         const my = (event.global.y - offsetY) / scale;
         dragInfo.current = {
@@ -181,24 +254,91 @@ const App: React.FC = () => {
       drawPoint(block.Entrance.Point, 0x00e676, '入口');
       drawPoint(block.Exit.Point, 0xff1744, '出口');
     });
+    // 在画布中心(0,0)绘制十字和标签，确保在最上层
+    const crossLen = 30;
+    const crossColor = 0xff1744; // 红色
+    const crossThickness = 5;
+    const zeroX = 0 * scale + offsetX;
+    const zeroY = 0 * scale + offsetY;
+    const cross = new PIXI.Graphics();
+    cross.lineStyle(crossThickness, crossColor, 1)
+      .moveTo(zeroX - crossLen, zeroY)
+      .lineTo(zeroX + crossLen, zeroY)
+      .moveTo(zeroX, zeroY - crossLen)
+      .lineTo(zeroX, zeroY + crossLen);
+    layer.addChild(cross as unknown as PIXI.DisplayObject);
+    const centerText = new PIXI.Text('场地锚点', {
+      fontSize: 20,
+      fill: crossColor,
+      fontWeight: 'bold',
+      align: 'center',
+      stroke: 0x000000,
+      strokeThickness: 4
+    });
+    centerText.anchor.set(0.5);
+    centerText.x = zeroX;
+    centerText.y = zeroY - crossLen - 18;
+    layer.addChild(centerText as unknown as PIXI.DisplayObject);
+    // 先绘制网格（在所有动块和锚点下方）
+    const grid = new PIXI.Graphics();
+    const gridSpacing = 100; // 100cm
+    const gridColor = 0x888888;
+    const gridAlpha = 0.3;
+    const mainAxisColor = 0xaaaaaa;
+    const mainAxisThickness = 2;
+    const gridThickness = 1;
+    // 画布像素范围
+    const container = pixiContainer.current;
+    const canvasWidth = container?.clientWidth || 1200;
+    const canvasHeight = container?.clientHeight || 800;
+    // 画布世界坐标范围
+    const worldLeft = (-offsetX) / scale;
+    const worldRight = (canvasWidth - offsetX) / scale;
+    const worldTop = (-offsetY) / scale;
+    const worldBottom = (canvasHeight - offsetY) / scale;
+    // 以0为中心，向两侧画格线
+    const minX = Math.floor(worldLeft / gridSpacing) * gridSpacing;
+    const maxX = Math.ceil(worldRight / gridSpacing) * gridSpacing;
+    const minY = Math.floor(worldTop / gridSpacing) * gridSpacing;
+    const maxY = Math.ceil(worldBottom / gridSpacing) * gridSpacing;
+    // 竖线
+    for (let x = minX; x <= maxX; x += gridSpacing) {
+      const px = x * scale + offsetX;
+      grid.lineStyle(x === 0 ? mainAxisThickness : gridThickness, x === 0 ? mainAxisColor : gridColor, gridAlpha)
+        .moveTo(px, 0)
+        .lineTo(px, canvasHeight);
+    }
+    // 横线
+    for (let y = minY; y <= maxY; y += gridSpacing) {
+      const py = y * scale + offsetY;
+      grid.lineStyle(y === 0 ? mainAxisThickness : gridThickness, y === 0 ? mainAxisColor : gridColor, gridAlpha)
+        .moveTo(0, py)
+        .lineTo(canvasWidth, py);
+    }
+    layer.addChild(grid as unknown as PIXI.DisplayObject);
     const app = appRef.current;
     if (!app) return;
     const handlePointerMove = (event: PIXI.FederatedPointerEvent) => {
       if (!dragInfo.current) return;
       const { blockIndex, offset } = dragInfo.current;
-      const blockIdx = jsonData.findIndex(b => b.Index === blockIndex);
-      if (blockIdx === -1) return;
+      // 多选拖拽：所有选中动块一起移动
+      const indices = selectedIndices.length > 0 ? selectedIndices : [blockIndex];
       const mx = (event.global.x - offsetX) / scale;
       const my = (event.global.y - offsetY) / scale;
       const dx = mx - offset.x;
       const dy = my - offset.y;
       setJsonData(prev => {
         const newArr = [...prev];
-        const b = { ...newArr[blockIdx] };
-        b.Points = b.Points.map(p => ({ Point: { X: p.Point.X + dx, Y: p.Point.Y + dy } }));
-        b.Entrance = { Point: { X: b.Entrance.Point.X + dx, Y: b.Entrance.Point.Y + dy } };
-        b.Exit = { Point: { X: b.Exit.Point.X + dx, Y: b.Exit.Point.Y + dy } };
-        newArr[blockIdx] = b;
+        indices.forEach(idx => {
+          const bIdx = newArr.findIndex(b => b.Index === idx);
+          if (bIdx !== -1) {
+            const b = { ...newArr[bIdx] };
+            b.Points = b.Points.map(p => ({ Point: { X: p.Point.X + dx, Y: p.Point.Y + dy } }));
+            b.Entrance = { Point: { X: b.Entrance.Point.X + dx, Y: b.Entrance.Point.Y + dy } };
+            b.Exit = { Point: { X: b.Exit.Point.X + dx, Y: b.Exit.Point.Y + dy } };
+            newArr[bIdx] = b;
+          }
+        });
         return newArr;
       });
       dragInfo.current = {
@@ -220,7 +360,7 @@ const App: React.FC = () => {
       app.stage.off('pointerup', handlePointerUp);
       app.stage.off('pointerupoutside', handlePointerUp);
     };
-  }, [jsonData, selectedIndex, pixiReady, viewTransform]);
+  }, [jsonData, selectedIndices, pixiReady, viewTransform]);
 
   // antd文件上传props
   const uploadProps: UploadProps = {
@@ -233,8 +373,7 @@ const App: React.FC = () => {
           const text = event.target?.result as string;
           const data = JSON.parse(text);
           setJsonData(data);
-          setSelectedIndex(null);
-          setSelectedBlock(null);
+          setSelectedIndices([]); // 导入时清空多选
           fitViewToBlocks(data);
           message.success('JSON文件加载成功');
         } catch (err) {
@@ -259,15 +398,53 @@ const App: React.FC = () => {
     message.success('JSON已导出');
   };
 
-  // 旋转按钮
+  // 批量旋转按钮
   const handleRotate = () => {
-    if(selectedBlock) {
-      setJsonData(prev => prev.map(b =>
-        b.Index === selectedBlock.Index
-          ? { ...b, DeltaYaw: (b.DeltaYaw + 15) % 360 }
-          : b
-      ));
-      setSelectedBlock(b => b ? { ...b, DeltaYaw: (b.DeltaYaw + 15) % 360 } : b);
+    if(selectedIndices.length > 0) {
+      // 1. 计算所有选中动块所有点的整体中心点
+      let allPoints: { x: number, y: number, blockIdx: number, type: 'vertex'|'entrance'|'exit', pointIdx?: number }[] = [];
+      jsonData.forEach((b) => {
+        if (selectedIndices.includes(b.Index)) {
+          b.Points.forEach((p, pi) => allPoints.push({ x: p.Point.X, y: p.Point.Y, blockIdx: b.Index, type: 'vertex', pointIdx: pi }));
+          allPoints.push({ x: b.Entrance.Point.X, y: b.Entrance.Point.Y, blockIdx: b.Index, type: 'entrance' });
+          allPoints.push({ x: b.Exit.Point.X, y: b.Exit.Point.Y, blockIdx: b.Index, type: 'exit' });
+        }
+      });
+      if (allPoints.length === 0) return;
+      const centerX = allPoints.reduce((sum, p) => sum + p.x, 0) / allPoints.length;
+      const centerY = allPoints.reduce((sum, p) => sum + p.y, 0) / allPoints.length;
+      // 2. 旋转角度（15度）
+      const angle = 15 * Math.PI / 180;
+      // 3. 旋转所有点
+      setJsonData(prev => prev.map(b => {
+        if (!selectedIndices.includes(b.Index)) return b;
+        // 旋转所有点（以整体中心点为圆心）
+        const newPoints = b.Points.map(p => {
+          const x = p.Point.X - centerX;
+          const y = p.Point.Y - centerY;
+          return { Point: {
+            X: centerX + (x * Math.cos(angle) - y * Math.sin(angle)),
+            Y: centerY + (x * Math.sin(angle) + y * Math.cos(angle)),
+          }};
+        });
+        // 旋转入口
+        const ex = b.Entrance.Point.X - centerX;
+        const ey = b.Entrance.Point.Y - centerY;
+        const newEntrance = { Point: {
+          X: centerX + (ex * Math.cos(angle) - ey * Math.sin(angle)),
+          Y: centerY + (ex * Math.sin(angle) + ey * Math.cos(angle)),
+        }};
+        // 旋转出口
+        const ox = b.Exit.Point.X - centerX;
+        const oy = b.Exit.Point.Y - centerY;
+        const newExit = { Point: {
+          X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
+          Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
+        }};
+        // 多选时DeltaYaw不变，单选时才加15°
+        const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
+        return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw };
+      }));
     }
   };
 
@@ -280,6 +457,108 @@ const App: React.FC = () => {
       return prev;
     });
   };
+
+  const rotateSelectedBlocks = (angleDeg: number) => {
+    const indices = selectedIndicesRef.current;
+    const data = jsonDataRef.current;
+    if(indices.length > 0) {
+      // 计算所有选中动块所有点的整体中心点
+      let allPoints: { x: number, y: number }[] = [];
+      data.forEach((b) => {
+        if (indices.includes(b.Index)) {
+          b.Points.forEach((p) => allPoints.push({ x: p.Point.X, y: p.Point.Y }));
+          allPoints.push({ x: b.Entrance.Point.X, y: b.Entrance.Point.Y });
+          allPoints.push({ x: b.Exit.Point.X, y: b.Exit.Point.Y });
+        }
+      });
+      if (allPoints.length === 0) return;
+      const centerX = allPoints.reduce((sum, p) => sum + p.x, 0) / allPoints.length;
+      const centerY = allPoints.reduce((sum, p) => sum + p.y, 0) / allPoints.length;
+      const angle = angleDeg * Math.PI / 180;
+      setJsonData(prev => prev.map(b => {
+        if (!indices.includes(b.Index)) return b;
+        const newPoints = b.Points.map(p => {
+          const x = p.Point.X - centerX;
+          const y = p.Point.Y - centerY;
+          return { Point: {
+            X: centerX + (x * Math.cos(angle) - y * Math.sin(angle)),
+            Y: centerY + (x * Math.sin(angle) + y * Math.cos(angle)),
+          }};
+        });
+        const ex = b.Entrance.Point.X - centerX;
+        const ey = b.Entrance.Point.Y - centerY;
+        const newEntrance = { Point: {
+          X: centerX + (ex * Math.cos(angle) - ey * Math.sin(angle)),
+          Y: centerY + (ex * Math.sin(angle) + ey * Math.cos(angle)),
+        }};
+        const ox = b.Exit.Point.X - centerX;
+        const oy = b.Exit.Point.Y - centerY;
+        const newExit = { Point: {
+          X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
+          Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
+        }};
+        return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit };
+      }));
+    }
+  };
+
+  // R键旋转控制
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftDown(true);
+      if (e.key === 'r' || e.key === 'R') {
+        if (!isRDownRef.current) {
+          isRDownRef.current = true;
+          rotateSelectedBlocks(15);
+          // 启动1秒延迟，1秒后如仍按住R键则开始持续旋转
+          if (!rotateDelayTimeoutRef.current) {
+            rotateDelayTimeoutRef.current = setTimeout(() => {
+              if (isRDownRef.current && !rotateTimerRef.current) {
+                rotateTimerRef.current = setInterval(() => {
+                  rotateSelectedBlocks(4);
+                }, 100);
+              }
+              rotateDelayTimeoutRef.current = null;
+            }, 1000);
+          }
+        }
+      }
+    };
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Shift') setIsShiftDown(false);
+      if (e.key === 'r' || e.key === 'R') {
+        isRDownRef.current = false;
+        if (rotateDelayTimeoutRef.current) {
+          clearTimeout(rotateDelayTimeoutRef.current);
+          rotateDelayTimeoutRef.current = null;
+        }
+        if (rotateTimerRef.current) {
+          clearInterval(rotateTimerRef.current);
+          rotateTimerRef.current = null;
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown, { passive: false });
+    window.addEventListener('keyup', handleKeyUp, { passive: false });
+    window.addEventListener('blur', () => {
+      isRDownRef.current = false;
+      if (rotateDelayTimeoutRef.current) {
+        clearTimeout(rotateDelayTimeoutRef.current);
+        rotateDelayTimeoutRef.current = null;
+      }
+      if (rotateTimerRef.current) {
+        clearInterval(rotateTimerRef.current);
+        rotateTimerRef.current = null;
+      }
+    });
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', () => {});
+      if (rotateDelayTimeoutRef.current) clearTimeout(rotateDelayTimeoutRef.current);
+      if (rotateTimerRef.current) clearInterval(rotateTimerRef.current);
+    };
+  }, []);
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -300,19 +579,52 @@ const App: React.FC = () => {
             <Button icon={<ExpandOutlined />} onClick={() => handleZoom('reset')} />
           </div>
           <Divider />
-          {selectedBlock ? (
-            <Card title={`动块信息 #${selectedBlock.Index}`} bordered={false} style={{ marginBottom: 16 }}>
-              <Text strong>名称：</Text>{selectedBlock.Name}<br />
-              <Text strong>旋转：</Text>{selectedBlock.DeltaYaw}°<br />
-              <Text strong>入口：</Text>({selectedBlock.Entrance.Point.X.toFixed(2)}, {selectedBlock.Entrance.Point.Y.toFixed(2)})<br />
-              <Text strong>出口：</Text>({selectedBlock.Exit.Point.X.toFixed(2)}, {selectedBlock.Exit.Point.Y.toFixed(2)})<br />
-              <Button icon={<RedoOutlined />} block style={{ marginTop: 16 }} onClick={handleRotate}>
-                旋转15°
-              </Button>
-            </Card>
+          {/* Hierarchy 视图 */}
+          <Card title="动块层级（多选）" bordered={false} style={{ marginBottom: 16, maxHeight: 600, overflow: 'auto' }}>
+            <List
+              dataSource={jsonData}
+              renderItem={item => (
+                <List.Item>
+                  <Checkbox
+                    checked={selectedIndices.includes(item.Index)}
+                    onChange={e => handleSelectBlock(item.Index, e.target.checked)}
+                  >
+                    <span style={{ fontWeight: selectedIndices.includes(item.Index) ? 'bold' : undefined }}>
+                      #{item.Index} {item.Name}
+                    </span>
+                  </Checkbox>
+                </List.Item>
+              )}
+            />
+          </Card>
+          <Button icon={<RedoOutlined />} block style={{ marginBottom: 16 }} onClick={handleRotate} disabled={selectedIndices.length === 0}>
+            批量旋转15°
+          </Button>
+          <Divider />
+          {selectedIndices.length === 1 ? (
+            (() => {
+              const selectedBlock = jsonData.find(b => b.Index === selectedIndices[0]);
+              return selectedBlock ? (
+                <Card title={`动块信息 #${selectedBlock.Index}`} bordered={false} style={{ marginBottom: 16 }}>
+                  <Text strong>名称：</Text>{selectedBlock.Name}<br />
+                  <Text strong>旋转：</Text>{selectedBlock.DeltaYaw}°<br />
+                  <Text strong>入口：</Text>({selectedBlock.Entrance.Point.X.toFixed(2)}, {selectedBlock.Entrance.Point.Y.toFixed(2)})<br />
+                  <Text strong>出口：</Text>({selectedBlock.Exit.Point.X.toFixed(2)}, {selectedBlock.Exit.Point.Y.toFixed(2)})<br />
+                  <Divider />
+                  <Text strong>顶点坐标：</Text>
+                  <ul style={{margin: 0, paddingLeft: 18}}>
+                    {selectedBlock.Points.map((p, idx) => (
+                      <li key={idx} style={{fontSize: 12}}>
+                        {`[${idx}] (${p.Point.X.toFixed(2)}, ${p.Point.Y.toFixed(2)})`}
+                      </li>
+                    ))}
+                  </ul>
+                </Card>
+              ) : null;
+            })()
           ) : (
             <Card bordered={false} style={{ marginBottom: 16, textAlign: 'center', color: '#aaa' }}>
-              暂未选中动块
+              {selectedIndices.length === 0 ? '暂未选中动块' : `已选中${selectedIndices.length}个动块`}
             </Card>
           )}
           <Divider />
