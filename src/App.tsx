@@ -1198,7 +1198,7 @@ const App: React.FC = () => {
 
   // 导出playarea.json
   const handleExportPlayArea = () => {
-    const dataStr = JSON.stringify(rawBlockData, null, 2);
+    const dataStr = JSON.stringify(jsonData, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1307,45 +1307,40 @@ const App: React.FC = () => {
             </div>
           </div>
           {/* 数据导入导出区 */}
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>数据导入导出</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Upload {...uploadPlayAreaProps} style={{ flex: 1 }}>
-                  <Button icon={<UploadOutlined />} type="primary" style={{ width: '100%' }}>
-                    导入playarea.json
-                  </Button>
-                </Upload>
-                <Upload {...uploadBlockDetailProps} style={{ flex: 1 }}>
-                  <Button icon={<UploadOutlined />} type="dashed" style={{ width: '100%' }}>
-                    导入PlayAreaBlockData_0.json
-                  </Button>
-                </Upload>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExport}>
-                  导出JSON
+          <div style={{ marginBottom: 32 }}>
+            <Card bordered={false} style={{ marginBottom: 20, borderRadius: 12, boxShadow: '0 2px 8px #f0f1f2' }}>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>数据导入</div>
+              <Upload {...uploadPlayAreaProps} style={{ width: '100%' }}>
+                <Button icon={<UploadOutlined />} type="primary" block size="large" style={{ marginBottom: 10, borderRadius: 8 }}>
+                  导入playarea.json
                 </Button>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Upload {...bgImgUploadProps} style={{ flex: 1 }}>
-                  <Button icon={<PictureOutlined />} style={{ width: '100%' }}>
-                    导入场地参考图
-                  </Button>
-                </Upload>
-                <Button style={{ width: '100%' }} onClick={handleExportBgImgPoints}>
-                  导出场地图点位
+              </Upload>
+              <Upload {...uploadBlockDetailProps} style={{ width: '100%' }}>
+                <Button icon={<UploadOutlined />} type="dashed" block size="large" style={{ borderRadius: 8 }}>
+                  导入PlayAreaBlockData.json
                 </Button>
-              </div>
-              <div style={{ display: 'flex', gap: 8 }}>
-                <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExportPlayArea}>
-                  导出playarea.json
+              </Upload>
+            </Card>
+            <Card bordered={false} style={{ marginBottom: 20, borderRadius: 12, boxShadow: '0 2px 8px #f0f1f2' }}>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>场地图片与点位</div>
+              <Upload {...bgImgUploadProps} style={{ width: '100%' }}>
+                <Button icon={<PictureOutlined />} block size="large" style={{ marginBottom: 10, borderRadius: 8 }}>
+                  导入场地参考图
                 </Button>
-                <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExportBlockDetail}>
-                  导出PlayAreaBlockData_0.json
-                </Button>
-              </div>
-            </div>
+              </Upload>
+              <Button block size="large" style={{ borderRadius: 8 }} onClick={handleExportBgImgPoints}>
+                导出场地图点位
+              </Button>
+            </Card>
+            <Card bordered={false} style={{ borderRadius: 12, boxShadow: '0 2px 8px #f0f1f2' }}>
+              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>数据导出</div>
+              <Button icon={<DownloadOutlined />} block size="large" style={{ marginBottom: 10, borderRadius: 8 }} onClick={handleExportPlayArea}>
+                导出playarea.json
+              </Button>
+              <Button icon={<DownloadOutlined />} type="dashed" block size="large" style={{ borderRadius: 8 }} onClick={handleExportBlockDetail}>
+                导出PlayAreaBlockData.json
+              </Button>
+            </Card>
           </div>
           <Divider />
           {/* Hierarchy 视图 */}
