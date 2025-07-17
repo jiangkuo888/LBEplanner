@@ -2,7 +2,7 @@
   "name": "webgl-editor",
   "version": "0.1.0",
   "private": true,
-  "homepage": "https://yourname.github.io/webgl-editor",
+  "homepage": "https://jiangkuo888.github.io/LBEplanner",
   "dependencies": {
     "@testing-library/dom": "^10.4.0",
     "@testing-library/jest-dom": "^6.6.3",

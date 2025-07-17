@@ -29,12 +29,17 @@ const COLORS = [
 const App: React.FC = () => {
   const pixiContainer = useRef<HTMLDivElement>(null);
   const appRef = useRef<PIXI.Application | null>(null);
-  const [jsonData, setJsonData] = useState<BlockData[]>([]);
+  // jsonData类型由BlockData[]改为any[]，以兼容合并后的动态字段
+  const [jsonData, setJsonData] = useState<any[]>([]);
   const blocksLayer = useRef<PIXI.Container | null>(null);
   const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
   const [selectedBlock, setSelectedBlock] = useState<BlockData | null>(null);
   const [pixiReady, setPixiReady] = useState(false);
   const dragInfo = useRef<{ blockIndex: number; offset: { x: number; y: number } } | null>(null);
+  // 新增：拖动阈值相关
+  const dragStartRef = useRef<{ x: number; y: number; blockIndex: number | null }>({ x: 0, y: 0, blockIndex: null });
+  const dragStartedRef = useRef<boolean>(false);
+  const DRAG_THRESHOLD = 5; // px
   const [viewTransform, setViewTransform] = useState<{ scale: number; offsetX: number; offsetY: number }>({ scale: 1, offsetX: 0, offsetY: 0 });
   const [selectedIndices, setSelectedIndices] = useState<number[]>([]);
   const [isShiftDown, setIsShiftDown] = useState(false);
@@ -58,6 +63,8 @@ const App: React.FC = () => {
   // 记录导入的场地图片文件名
   const [bgImgFileName, setBgImgFileName] = useState<string>('场地图点位.json');
   const [helpVisible, setHelpVisible] = useState(false);
+  const [blockDetailData, setBlockDetailData] = useState<any[]>([]);
+  const [rawBlockData, setRawBlockData] = useState<BlockData[]>([]); // 原始playarea数据
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -366,21 +373,12 @@ const App: React.FC = () => {
     // 计算所有动块的幕号到颜色的映射，并校验Name格式
     const sceneColorMap: Record<string, number> = {};
     let sceneList: string[] = [];
-    let invalidBlockName: string | null = null;
     jsonData.forEach(block => {
       const nameParts = (block.Name || '').split('-');
-      if (!block.Name || nameParts.length < 2 || !/^\d+$/.test(nameParts[0])) {
-        invalidBlockName = block.Name;
-      }
+      // 允许Name为任意字符串，首段用于分组
       const scene = nameParts[0];
       if (!sceneList.includes(scene)) sceneList.push(scene);
     });
-    if (invalidBlockName) {
-      setTimeout(() => {
-        window.alert(`动块名称“${invalidBlockName}”无法解析出幕号（应为“数字-...”格式），请检查数据！`);
-      }, 0);
-      return;
-    }
     sceneList.forEach((scene, idx) => {
       sceneColorMap[scene] = COLORS[idx % COLORS.length];
     });
@@ -396,12 +394,12 @@ const App: React.FC = () => {
       if (allSameScene && allSceneSelected) {
         // 计算所有选中动块所有点的中心点
         let allPoints: { x: number, y: number }[] = [];
-        selectedBlocks.forEach(b => {
-          b.Points.forEach(p => allPoints.push({ x: p.Point.X, y: p.Point.Y }));
+        selectedBlocks.forEach((b: any) => {
+          b.Points.forEach((p: any) => allPoints.push({ x: p.Point.X, y: p.Point.Y }));
         });
         if (allPoints.length > 0) {
-          const centerX = allPoints.reduce((sum, p) => sum + p.x, 0) / allPoints.length;
-          const centerY = allPoints.reduce((sum, p) => sum + p.y, 0) / allPoints.length;
+          const centerX = allPoints.reduce((sum: number, p: any) => sum + p.x, 0) / allPoints.length;
+          const centerY = allPoints.reduce((sum: number, p: any) => sum + p.y, 0) / allPoints.length;
           const sceneText = new PIXI.Text(selectedScene || '', {
             fontSize: 96,
             fill: 0xffeb3b,
@@ -416,11 +414,11 @@ const App: React.FC = () => {
           layer.addChild(sceneText as unknown as PIXI.DisplayObject);
         }
         // 新增：为每个动块中心点上方绘制该动块的名字
-        selectedBlocks.forEach(b => {
+        selectedBlocks.forEach((b: any) => {
           // 计算动块中心点
-          const points = b.Points.map(p => [p.Point.X, p.Point.Y]).flat();
+          const points = b.Points.map((p: any) => [p.Point.X, p.Point.Y]).flat();
           let centerX = 0, centerY = 0;
-          points.forEach((v, idx) => {
+          points.forEach((v: any, idx: any) => {
             if (idx % 2 === 0) centerX += v;
             else centerY += v;
           });
@@ -442,16 +440,16 @@ const App: React.FC = () => {
       }
     }
     jsonData.forEach((block, i) => {
-      const points = block.Points.map(p => [p.Point.X, p.Point.Y]).flat();
+      const points = block.Points.map((p: any) => [p.Point.X, p.Point.Y]).flat();
       let centerX = 0, centerY = 0;
-      points.forEach((v, idx) => {
+      points.forEach((v: any, idx: any) => {
         if (idx % 2 === 0) centerX += v;
         else centerY += v;
       });
       centerX /= block.Points.length;
       centerY /= block.Points.length;
       const rad = (block.DeltaYaw || 0) * Math.PI / 180;
-      const rotated = block.Points.map(p => {
+      const rotated = block.Points.map((p: any) => {
         const x = p.Point.X - centerX;
         const y = p.Point.Y - centerY;
         const rx = centerX + (x * Math.cos(rad) - y * Math.sin(rad));
@@ -470,21 +468,17 @@ const App: React.FC = () => {
       poly.lineStyle(isSelected ? 5 : 2, isSelected ? 0xffeb3b : 0xffffff, 0.9)
         .beginFill(color, isSelected ? 0.35 : 0.2)
         .moveTo(rotated[0].x, rotated[0].y);
-      rotated.forEach((pt, idx) => {
+      rotated.forEach((pt: any, idx: any) => {
         if (idx > 0) poly.lineTo(pt.x, pt.y);
       });
       poly.closePath().endFill();
       poly.on('pointerdown', (event: PIXI.FederatedPointerEvent) => {
-        handleCanvasSelect(block.Index);
+        // 记录初始坐标和blockIndex
         const mx = (event.global.x - offsetX) / scale;
         const my = (event.global.y - offsetY) / scale;
-        dragInfo.current = {
-          blockIndex: block.Index,
-          offset: {
-            x: mx,
-            y: my,
-          },
-        };
+        dragStartRef.current = { x: event.global.x, y: event.global.y, blockIndex: block.Index };
+        dragStartedRef.current = false;
+        // 只在pointerup时处理选中
       });
       layer.addChild(poly as unknown as PIXI.DisplayObject);
       const drawPoint = (pt: Point, color: number, label: string) => {
@@ -499,6 +493,21 @@ const App: React.FC = () => {
       };
       if (showEntrance) drawPoint(block.Entrance.Point, 0x00e676, '入口');
       if (showExit) drawPoint(block.Exit.Point, 0xff1744, '出口');
+      // 在动块中心点显示BlockRotateZAxisValue
+      if (block.BlockRotateZAxisValue !== undefined) {
+        const valueText = new PIXI.Text(String(block.BlockRotateZAxisValue), {
+          fontSize: 18,
+          fill: 0xffffff,
+          fontWeight: 'bold',
+          align: 'center',
+          stroke: 0x000000,
+          strokeThickness: 4
+        });
+        valueText.anchor.set(0.5);
+        valueText.x = centerX * scale + offsetX;
+        valueText.y = centerY * scale + offsetY;
+        layer.addChild(valueText as unknown as PIXI.DisplayObject);
+      }
     });
     // 在画布中心(0,0)绘制十字和标签，确保在最上层
     const crossLen = 30;
@@ -566,6 +575,21 @@ const App: React.FC = () => {
     const app = appRef.current;
     if (!app) return;
     const handlePointerMove = (event: PIXI.FederatedPointerEvent) => {
+      // 拖动阈值判断
+      if (dragStartRef.current.blockIndex !== null && !dragStartedRef.current) {
+        const dx = event.global.x - dragStartRef.current.x;
+        const dy = event.global.y - dragStartRef.current.y;
+        if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
+          // 超过阈值，开始拖拽
+          dragStartedRef.current = true;
+          const mx = (event.global.x - offsetX) / scale;
+          const my = (event.global.y - offsetY) / scale;
+          dragInfo.current = {
+            blockIndex: dragStartRef.current.blockIndex,
+            offset: { x: mx, y: my },
+          };
+        }
+      }
       if (!dragInfo.current) return;
       const { blockIndex, offset } = dragInfo.current;
       // 多选拖拽：所有选中动块一起移动
@@ -580,7 +604,7 @@ const App: React.FC = () => {
           const bIdx = newArr.findIndex(b => b.Index === idx);
           if (bIdx !== -1) {
             const b = { ...newArr[bIdx] };
-            b.Points = b.Points.map(p => ({ Point: { X: p.Point.X + dx, Y: p.Point.Y + dy } }));
+            b.Points = b.Points.map((p: any) => ({ Point: { X: p.Point.X + dx, Y: p.Point.Y + dy } }));
             b.Entrance = { Point: { X: b.Entrance.Point.X + dx, Y: b.Entrance.Point.Y + dy } };
             b.Exit = { Point: { X: b.Exit.Point.X + dx, Y: b.Exit.Point.Y + dy } };
             newArr[bIdx] = b;
@@ -596,8 +620,14 @@ const App: React.FC = () => {
         },
       };
     };
-    const handlePointerUp = () => {
+    const handlePointerUp = (event: PIXI.FederatedPointerEvent) => {
+      // 如果未发生拖拽，仅选中
+      if (!dragStartedRef.current && dragStartRef.current.blockIndex !== null) {
+        handleCanvasSelect(dragStartRef.current.blockIndex);
+      }
       dragInfo.current = null;
+      dragStartRef.current = { x: 0, y: 0, blockIndex: null };
+      dragStartedRef.current = false;
     };
     app.stage.on('pointermove', handlePointerMove);
     app.stage.on('pointerup', handlePointerUp);
@@ -726,6 +756,71 @@ const App: React.FC = () => {
     },
   };
 
+  // playarea.json导入props
+  const uploadPlayAreaProps: UploadProps = {
+    accept: 'application/json',
+    showUploadList: false,
+    beforeUpload: (file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const text = event.target?.result as string;
+          const data = JSON.parse(text);
+          setRawBlockData(data);
+          // 合并数据
+          mergeBlockData(data, blockDetailData);
+          setSelectedIndices([]);
+          fitViewToBlocks(data);
+          message.success('playarea.json加载成功');
+        } catch (err) {
+          message.error('playarea.json解析失败');
+        }
+      };
+      reader.readAsText(file);
+      return false;
+    },
+  };
+  // PlayAreaBlockData_0.json导入props
+  const uploadBlockDetailProps: UploadProps = {
+    accept: 'application/json',
+    showUploadList: false,
+    beforeUpload: (file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const text = event.target?.result as string;
+          const data = JSON.parse(text);
+          setBlockDetailData(data);
+          // 只添加 BlockRotateZAxisValue 字段
+          addBlockRotateZAxisValue(rawBlockData, data);
+          message.success('PlayAreaBlockData_0.json加载成功');
+        } catch (err) {
+          message.error('PlayAreaBlockData_0.json解析失败');
+        }
+      };
+      reader.readAsText(file);
+      return false;
+    },
+  };
+
+  // 只添加 BlockRotateZAxisValue 字段
+  function addBlockRotateZAxisValue(playarea: any[], detail: any[]) {
+    if (!Array.isArray(playarea) || !Array.isArray(detail)) return;
+    const updated = playarea.map(block => {
+      const detailBlock = detail.find((d: any) => d.GlobalIndex === block.Index);
+      if (detailBlock && detailBlock.BlockRotateZAxisValue !== undefined) {
+        return { ...block, BlockRotateZAxisValue: detailBlock.BlockRotateZAxisValue };
+      }
+      return { ...block };
+    });
+    setJsonData(updated);
+  }
+  // 合并逻辑
+  function mergeBlockData(playarea: any[], detail: any[]) {
+    if (!Array.isArray(playarea) || !Array.isArray(detail)) return;
+    setJsonData(playarea);
+  }
+
   // 参考图上传props
   const bgImgUploadProps: UploadProps = {
     accept: 'image/png',
@@ -806,21 +901,21 @@ const App: React.FC = () => {
       let allPoints: { x: number, y: number, blockIdx: number, type: 'vertex'|'entrance'|'exit', pointIdx?: number }[] = [];
       jsonData.forEach((b) => {
         if (selectedIndices.includes(b.Index)) {
-          b.Points.forEach((p, pi) => allPoints.push({ x: p.Point.X, y: p.Point.Y, blockIdx: b.Index, type: 'vertex', pointIdx: pi }));
+          b.Points.forEach((p: any, pi: any) => allPoints.push({ x: p.Point.X, y: p.Point.Y, blockIdx: b.Index, type: 'vertex', pointIdx: pi }));
           allPoints.push({ x: b.Entrance.Point.X, y: b.Entrance.Point.Y, blockIdx: b.Index, type: 'entrance' });
           allPoints.push({ x: b.Exit.Point.X, y: b.Exit.Point.Y, blockIdx: b.Index, type: 'exit' });
         }
       });
       if (allPoints.length === 0) return;
-      const centerX = allPoints.reduce((sum, p) => sum + p.x, 0) / allPoints.length;
-      const centerY = allPoints.reduce((sum, p) => sum + p.y, 0) / allPoints.length;
+      const centerX = allPoints.reduce((sum: number, p: any) => sum + p.x, 0) / allPoints.length;
+      const centerY = allPoints.reduce((sum: number, p: any) => sum + p.y, 0) / allPoints.length;
       // 2. 旋转角度（15度）
       const angle = 15 * Math.PI / 180;
       // 3. 旋转所有点
       setJsonData(prev => prev.map(b => {
         if (!selectedIndices.includes(b.Index)) return b;
         // 旋转所有点（以整体中心点为圆心）
-        const newPoints = b.Points.map(p => {
+        const newPoints = b.Points.map((p: any, idx: any) => {
           const x = p.Point.X - centerX;
           const y = p.Point.Y - centerY;
           return { Point: {
@@ -867,18 +962,18 @@ const App: React.FC = () => {
       let allPoints: { x: number, y: number }[] = [];
       data.forEach((b) => {
         if (indices.includes(b.Index)) {
-          b.Points.forEach((p) => allPoints.push({ x: p.Point.X, y: p.Point.Y }));
+          b.Points.forEach((p: any) => allPoints.push({ x: p.Point.X, y: p.Point.Y }));
           allPoints.push({ x: b.Entrance.Point.X, y: b.Entrance.Point.Y });
           allPoints.push({ x: b.Exit.Point.X, y: b.Exit.Point.Y });
         }
       });
       if (allPoints.length === 0) return;
-      const centerX = allPoints.reduce((sum, p) => sum + p.x, 0) / allPoints.length;
-      const centerY = allPoints.reduce((sum, p) => sum + p.y, 0) / allPoints.length;
+      const centerX = allPoints.reduce((sum: number, p: any) => sum + p.x, 0) / allPoints.length;
+      const centerY = allPoints.reduce((sum: number, p: any) => sum + p.y, 0) / allPoints.length;
       const angle = angleDeg * Math.PI / 180;
       setJsonData(prev => prev.map(b => {
         if (!indices.includes(b.Index)) return b;
-        const newPoints = b.Points.map(p => {
+        const newPoints = b.Points.map((p: any, idx: any) => {
           const x = p.Point.X - centerX;
           const y = p.Point.Y - centerY;
           return { Point: {
@@ -1065,6 +1160,31 @@ const App: React.FC = () => {
     message.success('场地图点位已导出');
   };
 
+  // 导出playarea.json
+  const handleExportPlayArea = () => {
+    const dataStr = JSON.stringify(rawBlockData, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'playarea_export.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    message.success('playarea.json已导出');
+  };
+  // 导出PlayAreaBlockData_0.json
+  const handleExportBlockDetail = () => {
+    const dataStr = JSON.stringify(blockDetailData, null, 2);
+    const blob = new Blob([dataStr], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'PlayAreaBlockData_0_export.json';
+    a.click();
+    URL.revokeObjectURL(url);
+    message.success('PlayAreaBlockData_0.json已导出');
+  };
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider width={320} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2' }}>
@@ -1146,11 +1266,18 @@ const App: React.FC = () => {
             <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>数据导入导出</div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <div style={{ display: 'flex', gap: 8 }}>
-                <Upload {...uploadProps} style={{ flex: 1 }}>
+                <Upload {...uploadPlayAreaProps} style={{ flex: 1 }}>
                   <Button icon={<UploadOutlined />} type="primary" style={{ width: '100%' }}>
-                    导入JSON
+                    导入playarea.json
                   </Button>
                 </Upload>
+                <Upload {...uploadBlockDetailProps} style={{ flex: 1 }}>
+                  <Button icon={<UploadOutlined />} type="dashed" style={{ width: '100%' }}>
+                    导入PlayAreaBlockData_0.json
+                  </Button>
+                </Upload>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
                 <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExport}>
                   导出JSON
                 </Button>
@@ -1163,6 +1290,14 @@ const App: React.FC = () => {
                 </Upload>
                 <Button style={{ width: '100%' }} onClick={handleExportBgImgPoints}>
                   导出场地图点位
+                </Button>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExportPlayArea}>
+                  导出playarea.json
+                </Button>
+                <Button icon={<DownloadOutlined />} style={{ width: '100%' }} onClick={handleExportBlockDetail}>
+                  导出PlayAreaBlockData_0.json
                 </Button>
               </div>
             </div>
@@ -1195,16 +1330,10 @@ const App: React.FC = () => {
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>{`动块信息 #${selectedBlock.Index}`}</div>
                   <Card bordered={false}>
-                    <Text strong>名称：</Text>{selectedBlock.Name}<br />
-                    <Text strong>旋转：</Text>{selectedBlock.DeltaYaw}°<br />
-                    <Text strong>入口：</Text>({selectedBlock.Entrance.Point.X.toFixed(2)}, {selectedBlock.Entrance.Point.Y.toFixed(2)})<br />
-                    <Text strong>出口：</Text>({selectedBlock.Exit.Point.X.toFixed(2)}, {selectedBlock.Exit.Point.Y.toFixed(2)})<br />
-                    <Divider />
-                    <Text strong>顶点坐标：</Text>
                     <ul style={{margin: 0, paddingLeft: 18}}>
-                      {selectedBlock.Points.map((p, idx) => (
-                        <li key={idx} style={{fontSize: 12}}>
-                          {`[${idx}] (${p.Point.X.toFixed(2)}, ${p.Point.Y.toFixed(2)})`}
+                      {Object.entries(selectedBlock).map(([key, value]) => (
+                        <li key={key} style={{fontSize: 13, marginBottom: 2}}>
+                          <b>{key}：</b>{typeof value === 'object' ? JSON.stringify(value) : String(value)}
                         </li>
                       ))}
                     </ul>
