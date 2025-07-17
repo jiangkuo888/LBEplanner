@@ -1014,15 +1014,32 @@ const App: React.FC = () => {
     }
   };
 
-  // R键旋转控制
+  // Q/E键旋转控制
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Shift') setIsShiftDown(true);
-      if (e.key === 'r' || e.key === 'R') {
+      if (e.key === 'q' || e.key === 'Q') {
+        if (!isRDownRef.current) {
+          isRDownRef.current = true;
+          rotateSelectedBlocks(-15);
+          // 启动1秒延迟，1秒后如仍按住Q键则开始持续旋转
+          if (!rotateDelayTimeoutRef.current) {
+            rotateDelayTimeoutRef.current = setTimeout(() => {
+              if (isRDownRef.current && !rotateTimerRef.current) {
+                rotateTimerRef.current = setInterval(() => {
+                  rotateSelectedBlocks(-4);
+                }, 100);
+              }
+              rotateDelayTimeoutRef.current = null;
+            }, 1000);
+          }
+        }
+      }
+      if (e.key === 'e' || e.key === 'E') {
         if (!isRDownRef.current) {
           isRDownRef.current = true;
           rotateSelectedBlocks(15);
-          // 启动1秒延迟，1秒后如仍按住R键则开始持续旋转
+          // 启动1秒延迟，1秒后如仍按住E键则开始持续旋转
           if (!rotateDelayTimeoutRef.current) {
             rotateDelayTimeoutRef.current = setTimeout(() => {
               if (isRDownRef.current && !rotateTimerRef.current) {
@@ -1038,7 +1055,7 @@ const App: React.FC = () => {
     };
     const handleKeyUp = (e: KeyboardEvent) => {
       if (e.key === 'Shift') setIsShiftDown(false);
-      if (e.key === 'r' || e.key === 'R') {
+      if (e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') {
         isRDownRef.current = false;
         if (rotateDelayTimeoutRef.current) {
           clearTimeout(rotateDelayTimeoutRef.current);
@@ -1130,19 +1147,22 @@ const App: React.FC = () => {
     canvas.addEventListener('wheel', handleWheel, { passive: false });
     // 旋转和缩放快捷键
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (bgImgSelected && (e.key === 'r' || e.key === 'R')) {
-        setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation + Math.PI / 12 } : prev); // 15度
-      }
       if (bgImgSelected && (e.key === 'q' || e.key === 'Q')) {
-        startScale('in');
+        setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation - Math.PI / 12 } : prev); // 逆时针15度
       }
       if (bgImgSelected && (e.key === 'e' || e.key === 'E')) {
+        setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation + Math.PI / 12 } : prev); // 顺时针15度
+      }
+      if (bgImgSelected && (e.key === 'a' || e.key === 'A')) {
+        startScale('in');
+      }
+      if (bgImgSelected && (e.key === 'd' || e.key === 'D')) {
         startScale('out');
       }
       if (e.key === 'Escape') setBgImgSelected(false);
     };
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') {
+      if (e.key === 'a' || e.key === 'A' || e.key === 'd' || e.key === 'D') {
         stopScale();
       }
     };
@@ -1231,22 +1251,23 @@ const App: React.FC = () => {
                   <ul style={{ marginTop: 6, marginBottom: 6 }}>
                     <li><b>选择动块：</b> 单击动块（默认选中同一幕所有动块）；按住 <b>Shift</b> 键单击可多选/取消多选；侧边栏复选框也可多选/单选。</li>
                     <li><b>拖拽动块：</b> 鼠标左键拖动选中动块移动。开启“可以移动单独动块”时，单选动块可独立拖动。</li>
-                    <li><b>旋转动块：</b> 选中动块后，按 <b>R</b> 键单次旋转15°，长按1秒后持续旋转（每100ms旋转4°）。</li>
+                    <li><b>旋转动块：</b> 选中动块后，按 <b>Q</b> 键动块逆时针旋转15°，长按1秒后持续旋转（每100ms旋转4°）；按 <b>E</b> 键动块顺时针旋转15°，长按1秒后持续旋转（每100ms旋转4°）。</li>
                     <li><b>缩放视图：</b> 鼠标滚轮以鼠标位置为中心缩放画布。</li>
                     <li><b>平移视图：</b> 鼠标右键按住画布拖动，实现无限平移。</li>
                   </ul>
                 </li>
                 <li style={{ marginBottom: 12 }}><b>场地图片与打点</b>
                   <ul style={{ marginTop: 6, marginBottom: 6 }}>
-                    <li><b>导入场地图片：</b> 侧边栏“导入场地参考图”按钮，支持CAD或手绘PNG图片。</li>
+                    <li><b>导入场地参考图：</b> 侧边栏“导入场地参考图”按钮，支持CAD或手绘PNG图片。</li>
                     <li><b>打点模式：</b> 开启“场地图打点”后：
                       <ul style={{ marginTop: 4, marginBottom: 4 }}>
                         <li>鼠标左键点击图片依次打点，闭合后形成路径。</li>
                         <li>闭合后，点击图片并拖动可移动图片。</li>
                         <li>鼠标滚轮缩放图片。</li>
-                        <li><b>R</b>键：图片顺时针旋转15°。</li>
-                        <li><b>Q</b>键：按住持续放大图片。</li>
-                        <li><b>E</b>键：按住持续缩小图片。</li>
+                        <li><b>Q</b>键：图片逆时针旋转15°。</li>
+                        <li><b>E</b>键：图片顺时针旋转15°。</li>
+                        <li><b>A</b>键：按住持续放大图片。</li>
+                        <li><b>D</b>键：按住持续缩小图片。</li>
                         <li><b>Esc</b>键：取消图片选中。</li>
                       </ul>
                     </li>
