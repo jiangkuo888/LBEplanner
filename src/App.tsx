@@ -912,6 +912,7 @@ const App: React.FC = () => {
       // 2. 旋转角度（15度）
       const angle = 15 * Math.PI / 180;
       // 3. 旋转所有点
+      const minIdx = Math.min(...selectedIndices);
       setJsonData(prev => prev.map(b => {
         if (!selectedIndices.includes(b.Index)) return b;
         // 旋转所有点（以整体中心点为圆心）
@@ -937,9 +938,17 @@ const App: React.FC = () => {
           X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
           Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
         }};
-        // 多选时DeltaYaw不变，单选时才加15°
-        const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
-        return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw };
+        // 只更新 index 最小的动块的 BlockRotateZAxisValue
+        if (selectedIndices.length === 1 || b.Index === minIdx) {
+          const newBlockRotateZAxisValue = (b.BlockRotateZAxisValue !== undefined ? b.BlockRotateZAxisValue : 0) + 15;
+          // 多选时DeltaYaw不变，单选时才加15°
+          const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
+          return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw, BlockRotateZAxisValue: newBlockRotateZAxisValue };
+        } else {
+          // 其它被选中动块 BlockRotateZAxisValue 不变
+          const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
+          return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw };
+        }
       }));
     }
   };
@@ -971,6 +980,7 @@ const App: React.FC = () => {
       const centerX = allPoints.reduce((sum: number, p: any) => sum + p.x, 0) / allPoints.length;
       const centerY = allPoints.reduce((sum: number, p: any) => sum + p.y, 0) / allPoints.length;
       const angle = angleDeg * Math.PI / 180;
+      const minIdx = Math.min(...indices);
       setJsonData(prev => prev.map(b => {
         if (!indices.includes(b.Index)) return b;
         const newPoints = b.Points.map((p: any, idx: any) => {
@@ -993,7 +1003,13 @@ const App: React.FC = () => {
           X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
           Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
         }};
-        return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit };
+        // 只更新 index 最小的动块的 BlockRotateZAxisValue
+        if (indices.length === 1 || b.Index === minIdx) {
+          const newBlockRotateZAxisValue = (b.BlockRotateZAxisValue !== undefined ? b.BlockRotateZAxisValue : 0) + angleDeg;
+          return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, BlockRotateZAxisValue: newBlockRotateZAxisValue };
+        } else {
+          return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit };
+        }
       }));
     }
   };
@@ -1174,7 +1190,15 @@ const App: React.FC = () => {
   };
   // 导出PlayAreaBlockData_0.json
   const handleExportBlockDetail = () => {
-    const dataStr = JSON.stringify(blockDetailData, null, 2);
+    // 保持导入 PlayAreaBlockData_0.json 的源文件格式，仅同步 BlockRotateZAxisValue 字段
+    const updated = blockDetailData.map((item: any) => {
+      const block = jsonData.find((b: any) => b.Index === item.GlobalIndex);
+      if (block && block.BlockRotateZAxisValue !== undefined) {
+        return { ...item, BlockRotateZAxisValue: block.BlockRotateZAxisValue };
+      }
+      return { ...item };
+    });
+    const dataStr = JSON.stringify(updated, null, 2);
     const blob = new Blob([dataStr], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
