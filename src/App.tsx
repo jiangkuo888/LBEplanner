@@ -20,6 +20,7 @@ interface BlockData {
   Entrance: { Point: Point };
   Exit: { Point: Point };
   DeltaYaw: number;
+  BlockRotateZAxisValue?: number;
 }
 
 const COLORS = [
@@ -920,7 +921,6 @@ const App: React.FC = () => {
       // 2. 旋转角度（15度）
       const angle = 15 * Math.PI / 180;
       // 3. 旋转所有点
-      const minIdx = Math.min(...selectedIndices);
       setJsonData(prev => prev.map(b => {
         if (!selectedIndices.includes(b.Index)) return b;
         // 旋转所有点（以整体中心点为圆心）
@@ -946,9 +946,12 @@ const App: React.FC = () => {
           X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
           Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
         }};
-        // 只在开启调节内容转向时才更新BlockRotateZAxisValue（用ref）
-        if (enableBlockRotateRef.current && (selectedIndices.length === 1 || b.Index === minIdx)) {
-          const newBlockRotateZAxisValue = (b.BlockRotateZAxisValue !== undefined ? b.BlockRotateZAxisValue : 0) + 15;
+        if (enableBlockRotateRef.current) {
+          let newBlockRotateZAxisValue = b.BlockRotateZAxisValue;
+          const minIdx = Math.min(...selectedIndices);
+          if ((b.BlockRotateZAxisValue !== undefined && b.BlockRotateZAxisValue !== 0) || b.Index === minIdx) {
+            newBlockRotateZAxisValue = (b.BlockRotateZAxisValue || 0) - 15;
+          }
           // 多选时DeltaYaw不变，单选时才加15°
           const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw, BlockRotateZAxisValue: newBlockRotateZAxisValue };
@@ -988,7 +991,6 @@ const App: React.FC = () => {
       const centerX = allPoints.reduce((sum: number, p: any) => sum + p.x, 0) / allPoints.length;
       const centerY = allPoints.reduce((sum: number, p: any) => sum + p.y, 0) / allPoints.length;
       const angle = angleDeg * Math.PI / 180;
-      const minIdx = Math.min(...indices);
       setJsonData(prev => prev.map(b => {
         if (!indices.includes(b.Index)) return b;
         const newPoints = b.Points.map((p: any, idx: any) => {
@@ -1011,9 +1013,12 @@ const App: React.FC = () => {
           X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
           Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
         }};
-        // 只在开启调节内容转向时才更新BlockRotateZAxisValue（用ref）
-        if (enableBlockRotateRef.current && (indices.length === 1 || b.Index === minIdx)) {
-          const newBlockRotateZAxisValue = (b.BlockRotateZAxisValue !== undefined ? b.BlockRotateZAxisValue : 0) + angleDeg;
+        if (enableBlockRotateRef.current) {
+          let newBlockRotateZAxisValue = b.BlockRotateZAxisValue;
+          const minIdx = Math.min(...indices);
+          if ((b.BlockRotateZAxisValue !== undefined && b.BlockRotateZAxisValue !== 0) || b.Index === minIdx) {
+            newBlockRotateZAxisValue = (b.BlockRotateZAxisValue || 0) - angleDeg;
+          }
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, BlockRotateZAxisValue: newBlockRotateZAxisValue };
         } else {
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit };
