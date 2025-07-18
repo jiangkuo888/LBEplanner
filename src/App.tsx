@@ -71,6 +71,11 @@ const App: React.FC = () => {
   // 修复：用ref同步enableBlockRotate，保证setJsonData回调里拿到最新值
   const enableBlockRotateRef = useRef(enableBlockRotate);
   useEffect(() => { enableBlockRotateRef.current = enableBlockRotate; }, [enableBlockRotate]);
+  // 新增：需要更新的动块index列表
+  const [needUpdateIndices, setNeedUpdateIndices] = useState<number[]>([]);
+  // 修复：用ref同步needUpdateIndices，保证setJsonData回调里拿到最新值
+  const needUpdateIndicesRef = useRef(needUpdateIndices);
+  useEffect(() => { needUpdateIndicesRef.current = needUpdateIndices; }, [needUpdateIndices]);
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -948,8 +953,8 @@ const App: React.FC = () => {
         }};
         if (enableBlockRotateRef.current) {
           let newBlockRotateZAxisValue = b.BlockRotateZAxisValue;
-          const minIdx = Math.min(...selectedIndices);
-          if ((b.BlockRotateZAxisValue !== undefined && b.BlockRotateZAxisValue !== 0) || b.Index === minIdx) {
+          // 只更新"需要更新的动块"（用ref保证最新）
+          if (needUpdateIndicesRef.current.includes(b.Index)) {
             newBlockRotateZAxisValue = (b.BlockRotateZAxisValue || 0) - 15;
           }
           // 多选时DeltaYaw不变，单选时才加15°
@@ -1015,8 +1020,8 @@ const App: React.FC = () => {
         }};
         if (enableBlockRotateRef.current) {
           let newBlockRotateZAxisValue = b.BlockRotateZAxisValue;
-          const minIdx = Math.min(...indices);
-          if ((b.BlockRotateZAxisValue !== undefined && b.BlockRotateZAxisValue !== 0) || b.Index === minIdx) {
+          // 只更新"需要更新的动块"（用ref保证最新）
+          if (needUpdateIndicesRef.current.includes(b.Index)) {
             newBlockRotateZAxisValue = (b.BlockRotateZAxisValue || 0) - angleDeg;
           }
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, BlockRotateZAxisValue: newBlockRotateZAxisValue };
@@ -1243,8 +1248,24 @@ const App: React.FC = () => {
     a.download = 'PlayAreaBlockData.json';
     a.click();
     URL.revokeObjectURL(url);
-    message.success('PlayAreaBlockData_0.json已导出');
+    message.success('PlayAreaBlockData.json已导出');
   };
+
+  // 监听选中动块变化，计算需要更新的动块
+  useEffect(() => {
+    if (!enableBlockRotateRef.current || selectedIndices.length === 0) {
+      setNeedUpdateIndices([]);
+      return;
+    }
+    // 只在选中变化时初始化一次
+    const selectedBlocks = jsonData.filter(b => selectedIndices.includes(b.Index));
+    const minIdx = Math.min(...selectedIndices);
+    const updateList = selectedBlocks
+      .filter(b => (b.BlockRotateZAxisValue !== undefined && b.BlockRotateZAxisValue !== 0) || b.Index === minIdx)
+      .map(b => b.Index);
+    setNeedUpdateIndices(updateList);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedIndices, enableBlockRotate]);
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
