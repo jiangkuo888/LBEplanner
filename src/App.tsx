@@ -448,17 +448,11 @@ const App: React.FC = () => {
       });
       centerX /= block.Points.length;
       centerY /= block.Points.length;
-      const rad = (block.DeltaYaw || 0) * Math.PI / 180;
-      const rotated = block.Points.map((p: any) => {
-        const x = p.Point.X - centerX;
-        const y = p.Point.Y - centerY;
-        const rx = centerX + (x * Math.cos(rad) - y * Math.sin(rad));
-        const ry = centerY + (x * Math.sin(rad) + y * Math.cos(rad));
-        return {
-          x: rx * scale + offsetX,
-          y: ry * scale + offsetY,
-        };
-      });
+      // 移除DeltaYaw旋转逻辑，直接使用原始点
+      const rotated = block.Points.map((p: any) => ({
+        x: p.Point.X * scale + offsetX,
+        y: p.Point.Y * scale + offsetY,
+      }));
       const poly = new PIXI.Graphics();
       const isSelected = selectedIndices.includes(block.Index);
       poly.interactive = true;
