@@ -1220,7 +1220,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'playarea_export.json';
+    a.download = 'PlayArea.json';
     a.click();
     URL.revokeObjectURL(url);
     message.success('playarea.json已导出');
@@ -1240,7 +1240,7 @@ const App: React.FC = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'PlayAreaBlockData_0_export.json';
+    a.download = 'PlayAreaBlockData.json';
     a.click();
     URL.revokeObjectURL(url);
     message.success('PlayAreaBlockData_0.json已导出');
