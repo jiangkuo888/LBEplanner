@@ -65,6 +65,11 @@ const App: React.FC = () => {
   const [helpVisible, setHelpVisible] = useState(false);
   const [blockDetailData, setBlockDetailData] = useState<any[]>([]);
   const [rawBlockData, setRawBlockData] = useState<BlockData[]>([]); // 原始playarea数据
+  // 新增：调节内容转向模式
+  const [enableBlockRotate, setEnableBlockRotate] = useState(false);
+  // 修复：用ref同步enableBlockRotate，保证setJsonData回调里拿到最新值
+  const enableBlockRotateRef = useRef(enableBlockRotate);
+  useEffect(() => { enableBlockRotateRef.current = enableBlockRotate; }, [enableBlockRotate]);
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -97,6 +102,11 @@ const App: React.FC = () => {
         if (prev.includes(index)) return prev;
         return [...prev, index];
       } else {
+        if (enableBlockRotateRef.current) {
+          // 调节内容转向开关开启时，选中index及其之后所有动块
+          const indices = jsonData.filter(b => b.Index >= index).map(b => b.Index);
+          return indices;
+        }
         if (moveSingleBlock) {
           if (prev.length > 1 && prev.includes(index)) {
             return prev;
@@ -627,9 +637,11 @@ const App: React.FC = () => {
     app.stage.on('pointerup', handlePointerUp);
     app.stage.on('pointerupoutside', handlePointerUp);
     return () => {
-      app.stage.off('pointermove', handlePointerMove);
-      app.stage.off('pointerup', handlePointerUp);
-      app.stage.off('pointerupoutside', handlePointerUp);
+      if (app && app.stage) {
+        app.stage.off('pointermove', handlePointerMove);
+        app.stage.off('pointerup', handlePointerUp);
+        app.stage.off('pointerupoutside', handlePointerUp);
+      }
     };
   }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint]);
 
@@ -719,11 +731,13 @@ const App: React.FC = () => {
     // pointermove和pointerup监听去掉canvas级别
     canvas.addEventListener('contextmenu', handleContextMenu);
     return () => {
-      canvas.removeEventListener('wheel', handleWheel);
-      canvas.removeEventListener('pointerdown', handlePointerDown);
-      // pointermove和pointerup监听去掉canvas级别
-      canvas.removeEventListener('contextmenu', handleContextMenu);
-      canvas.style.cursor = '';
+      if (canvas) {
+        canvas.removeEventListener('wheel', handleWheel);
+        canvas.removeEventListener('pointerdown', handlePointerDown);
+        // pointermove和pointerup监听去掉canvas级别
+        canvas.removeEventListener('contextmenu', handleContextMenu);
+        canvas.style.cursor = '';
+      }
     };
   }, [viewTransform]);
 
@@ -932,14 +946,14 @@ const App: React.FC = () => {
           X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
           Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
         }};
-        // 只更新 index 最小的动块的 BlockRotateZAxisValue
-        if (selectedIndices.length === 1 || b.Index === minIdx) {
+        // 只在开启调节内容转向时才更新BlockRotateZAxisValue（用ref）
+        if (enableBlockRotateRef.current && (selectedIndices.length === 1 || b.Index === minIdx)) {
           const newBlockRotateZAxisValue = (b.BlockRotateZAxisValue !== undefined ? b.BlockRotateZAxisValue : 0) + 15;
           // 多选时DeltaYaw不变，单选时才加15°
           const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw, BlockRotateZAxisValue: newBlockRotateZAxisValue };
         } else {
-          // 其它被选中动块 BlockRotateZAxisValue 不变
+          // 不更新BlockRotateZAxisValue
           const newDeltaYaw = selectedIndices.length === 1 ? (b.DeltaYaw + 15) % 360 : b.DeltaYaw;
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw };
         }
@@ -997,8 +1011,8 @@ const App: React.FC = () => {
           X: centerX + (ox * Math.cos(angle) - oy * Math.sin(angle)),
           Y: centerY + (ox * Math.sin(angle) + oy * Math.cos(angle)),
         }};
-        // 只更新 index 最小的动块的 BlockRotateZAxisValue
-        if (indices.length === 1 || b.Index === minIdx) {
+        // 只在开启调节内容转向时才更新BlockRotateZAxisValue（用ref）
+        if (enableBlockRotateRef.current && (indices.length === 1 || b.Index === minIdx)) {
           const newBlockRotateZAxisValue = (b.BlockRotateZAxisValue !== undefined ? b.BlockRotateZAxisValue : 0) + angleDeg;
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, BlockRotateZAxisValue: newBlockRotateZAxisValue };
         } else {
@@ -1045,6 +1059,10 @@ const App: React.FC = () => {
             }, 1000);
           }
         }
+      }
+      // 新增：按下Esc时取消所有动块选中
+      if (e.key === 'Escape') {
+        setSelectedIndices([]);
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
@@ -1165,7 +1183,7 @@ const App: React.FC = () => {
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
-      canvas.removeEventListener('wheel', handleWheel);
+      if (canvas) canvas.removeEventListener('wheel', handleWheel);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       stopScale();
@@ -1227,6 +1245,11 @@ const App: React.FC = () => {
     <Layout style={{ minHeight: '100vh' }}>
       <Sider width={320} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2' }}>
         <div style={{ padding: 24 }}>
+          {/* 新增：调节内容转向toggle按钮 */}
+          <div style={{ marginBottom: 16 }}>
+            <Switch checked={enableBlockRotate} onChange={setEnableBlockRotate} style={{ marginRight: 8 }} />
+            <span style={{ fontWeight: 600 }}>调节内容转向</span>
+          </div>
           {/* 帮助按钮 */}
           <Button type="link" style={{ float: 'right', marginBottom: 8 }} onClick={() => setHelpVisible(true)}>
             帮助
@@ -1244,7 +1267,7 @@ const App: React.FC = () => {
                 <li style={{ marginBottom: 12 }}><b>动块操作</b>
                   <ul style={{ marginTop: 6, marginBottom: 6 }}>
                     <li><b>选择动块：</b> 单击动块（默认选中同一幕所有动块）；按住 <b>Shift</b> 键单击可多选/取消多选；侧边栏复选框也可多选/单选。</li>
-                    <li><b>拖拽动块：</b> 鼠标左键拖动选中动块移动。开启“可以移动单独动块”时，单选动块可独立拖动。</li>
+                    <li><b>拖拽动块：</b> 鼠标左键拖动选中动块移动。开启"可以移动单独动块"时，单选动块可独立拖动。</li>
                     <li><b>旋转动块：</b> 选中动块后，按 <b>Q</b> 键动块逆时针旋转15°，长按1秒后持续旋转（每100ms旋转4°）；按 <b>E</b> 键动块顺时针旋转15°，长按1秒后持续旋转（每100ms旋转4°）。</li>
                     <li><b>缩放视图：</b> 鼠标滚轮以鼠标位置为中心缩放画布。</li>
                     <li><b>平移视图：</b> 鼠标右键按住画布拖动，实现无限平移。</li>
@@ -1252,8 +1275,8 @@ const App: React.FC = () => {
                 </li>
                 <li style={{ marginBottom: 12 }}><b>场地图片与打点</b>
                   <ul style={{ marginTop: 6, marginBottom: 6 }}>
-                    <li><b>导入场地参考图：</b> 侧边栏“导入场地参考图”按钮，支持CAD或手绘PNG图片。</li>
-                    <li><b>打点模式：</b> 开启“场地图打点”后：
+                    <li><b>导入场地参考图：</b> 侧边栏"导入场地参考图"按钮，支持CAD或手绘PNG图片。</li>
+                    <li><b>打点模式：</b> 开启"场地图打点"后：
                       <ul style={{ marginTop: 4, marginBottom: 4 }}>
                         <li>鼠标左键点击图片依次打点，闭合后形成路径。</li>
                         <li>闭合后，点击图片并拖动可移动图片。</li>
@@ -1265,13 +1288,13 @@ const App: React.FC = () => {
                         <li><b>Esc</b>键：取消图片选中。</li>
                       </ul>
                     </li>
-                    <li><b>导入/导出点位：</b> 导入图片后自动弹窗选择同名点位JSON（支持新旧格式）；侧边栏“导出场地图点位”按钮可导出当前点位和图片缩放信息。</li>
+                    <li><b>导入/导出点位：</b> 导入图片后自动弹窗选择同名点位JSON（支持新旧格式）；侧边栏"导出场地图点位"按钮可导出当前点位和图片缩放信息。</li>
                   </ul>
                 </li>
                 <li style={{ marginBottom: 12 }}><b>其它辅助操作</b>
                   <ul style={{ marginTop: 6, marginBottom: 6 }}>
-                    <li><b>数据导入导出：</b> 侧边栏“导入JSON”按钮导入动块数据，“导出JSON”按钮导出当前动块数据。</li>
-                    <li><b>入口/出口显示：</b> 侧边栏可切换“显示入口”“显示出口”开关。</li>
+                    <li><b>数据导入导出：</b> 侧边栏"导入JSON"按钮导入动块数据，"导出JSON"按钮导出当前动块数据。</li>
+                    <li><b>入口/出口显示：</b> 侧边栏可切换"显示入口""显示出口"开关。</li>
                     <li><b>辅助信息：</b> 画布中心始终显示红色锚点和坐标标签，辅助网格便于空间定位。</li>
                   </ul>
                 </li>
