@@ -4,6 +4,11 @@ import { Layout, Button, Upload, Card, Divider, Typography, message, List, Check
 import { UploadOutlined, DownloadOutlined, RedoOutlined, PlusOutlined, MinusOutlined, ExpandOutlined, PictureOutlined } from '@ant-design/icons';
 import type { UploadProps } from 'antd';
 import 'antd/dist/reset.css';
+import Sidebar from './components/Sidebar';
+import CanvasView from './components/CanvasView';
+import RightSider from './components/RightSider';
+import BlockList from './components/BlockList';
+import { BlockDetailContent } from './components/BlockDetail';
 
 const { Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -21,6 +26,7 @@ interface BlockData {
   Exit: { Point: Point };
   DeltaYaw: number;
   BlockRotateZAxisValue?: number;
+  bShouldRotate?: boolean;
 }
 
 const COLORS = [
@@ -76,10 +82,13 @@ const App: React.FC = () => {
   interface EditorSnapshot {
     jsonData: any[];
     bgImgPoints: {x: number, y: number}[];
-    backgroundImage: typeof backgroundImage;
+    backgroundImage: { x: number; y: number; scale: number; rotation: number } | null;
   }
   const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([]);
+  const [blockTooltip, setBlockTooltip] = useState<{ visible: boolean; x: number; y: number; block: any | null }>({ visible: false, x: 0, y: 0, block: null });
+  const blockTooltipTimer = useRef<NodeJS.Timeout | null>(null);
+  const [hoveredBlockIndex, setHoveredBlockIndex] = useState<number | null>(null);
 
   // 2. 深拷贝工具
   function deepClone(obj: any) {
@@ -91,10 +100,20 @@ const App: React.FC = () => {
     const lastSnap = undoStack.length > 0 ? JSON.stringify(undoStack[undoStack.length - 1].jsonData) : null;
     if (!Array.isArray(jsonData) || jsonData.length === 0) return;
     if (current === lastSnap) return; // 只有数据变化时才 push
+    // 只保存可序列化字段
+    const safeBgImg = backgroundImage
+      ? {
+          x: backgroundImage.x,
+          y: backgroundImage.y,
+          scale: backgroundImage.scale,
+          rotation: backgroundImage.rotation,
+          // texture: null // 不保存 texture
+        }
+      : null;
     const snap = {
       jsonData: deepClone(jsonData),
       bgImgPoints: deepClone(bgImgPoints),
-      backgroundImage: deepClone(backgroundImage),
+      backgroundImage: safeBgImg,
     };
     console.log('pushUndo 快照:', JSON.stringify(snap));
     setUndoStack(stack => [...stack, snap]);
@@ -535,6 +554,32 @@ const App: React.FC = () => {
         dragStartedRef.current = false;
         // 只在pointerup时处理选中
       });
+      // 新增：hover显示tooltip
+      poly.on('pointerover', (event: PIXI.FederatedPointerEvent) => {
+        setHoveredBlockIndex(block.Index);
+        const container = pixiContainer.current;
+        const rect = container?.getBoundingClientRect();
+        const clientX = rect ? rect.left + event.data.global.x : event.data.global.x;
+        const clientY = rect ? rect.top + event.data.global.y : event.data.global.y;
+        setBlockTooltip(prev => ({ ...prev, x: clientX, y: clientY }));
+      });
+      poly.on('pointermove', (event: PIXI.FederatedPointerEvent) => {
+        if (blockTooltip.visible && blockTooltip.block?.Index === block.Index) {
+          const container = pixiContainer.current;
+          const rect = container?.getBoundingClientRect();
+          const clientX = rect ? rect.left + event.data.global.x : event.data.global.x;
+          const clientY = rect ? rect.top + event.data.global.y : event.data.global.y;
+          setBlockTooltip(prev => ({ ...prev, x: clientX, y: clientY }));
+        }
+      });
+      poly.on('pointerout', () => {
+        setHoveredBlockIndex(null);
+        if (blockTooltipTimer.current) {
+          clearTimeout(blockTooltipTimer.current);
+          blockTooltipTimer.current = null;
+        }
+        setBlockTooltip({ visible: false, x: 0, y: 0, block: null });
+      });
       layer.addChild(poly as unknown as PIXI.DisplayObject);
       const drawPoint = (pt: Point, color: number, label: string) => {
         const g = new PIXI.Graphics();
@@ -875,10 +920,16 @@ const App: React.FC = () => {
     if (!Array.isArray(playarea) || !Array.isArray(detail)) return;
     const updated = playarea.map(block => {
       const detailBlock = detail.find((d: any) => d.GlobalIndex === block.Index);
-      if (detailBlock && detailBlock.BlockRotateZAxisValue !== undefined) {
-        return { ...block, BlockRotateZAxisValue: detailBlock.BlockRotateZAxisValue };
+      let newBlock = { ...block };
+      if (detailBlock) {
+        if (detailBlock.BlockRotateZAxisValue !== undefined) {
+          newBlock.BlockRotateZAxisValue = detailBlock.BlockRotateZAxisValue;
+        }
+        if (detailBlock.bShouldRotate !== undefined) {
+          newBlock.bShouldRotate = detailBlock.bShouldRotate;
+        }
       }
-      return { ...block };
+      return newBlock;
     });
     setJsonData(updated);
   }
@@ -1325,14 +1376,18 @@ const App: React.FC = () => {
       setNeedUpdateIndices([]);
       return;
     }
-    // 只在选中变化时初始化一次
-    const selectedBlocks = jsonData.filter(b => selectedIndices.includes(b.Index));
+    // 找到所有选中动块
+    let selectedBlocks = jsonData.filter(b => selectedIndices.includes(b.Index));
+    // 找到Index最小的动块
     const minIdx = Math.min(...selectedIndices);
-    const updateList = selectedBlocks
-      .filter(b => (b.BlockRotateZAxisValue !== undefined && b.BlockRotateZAxisValue !== 0) || b.Index === minIdx)
-      .map(b => b.Index);
+    // 标记Index最小的动块bShouldRotate为true
+    selectedBlocks = selectedBlocks.map(b =>
+      b.Index === minIdx ? { ...b, bShouldRotate: true } : b
+    );
+    // needUpdateIndices = bShouldRotate为true的 + Index最小的
+    let updateList = selectedBlocks.filter(b => b.bShouldRotate).map(b => b.Index);
+    if (!updateList.includes(minIdx)) updateList.push(minIdx);
     setNeedUpdateIndices(updateList);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndices, enableBlockRotate]);
 
   // 4. handleUndo/handleRedo
@@ -1356,11 +1411,19 @@ const App: React.FC = () => {
         console.error('撤销快照内容非法，未更新', last?.jsonData);
         return prev.slice(0, idx + 1);
       }
-      console.log('撤销到快照:', JSON.stringify(last.jsonData), '当前:', JSON.stringify(jsonData));
-      setRedoStack(r => [...r, { jsonData, bgImgPoints, backgroundImage }]);
+      setRedoStack(r => [...r, { jsonData, bgImgPoints, backgroundImage: backgroundImage ? {
+        x: backgroundImage.x,
+        y: backgroundImage.y,
+        scale: backgroundImage.scale,
+        rotation: backgroundImage.rotation,
+      } : null }]);
       setJsonDataWithClone(last.jsonData);
       setBgImgPoints(last.bgImgPoints);
-      setBackgroundImage(last.backgroundImage);
+      // 恢复 backgroundImage 的 x/y/scale/rotation，保留原有 texture
+      setBackgroundImage(prev => prev && last.backgroundImage ? {
+        ...prev,
+        ...last.backgroundImage
+      } : last.backgroundImage ? { ...last.backgroundImage, texture: null } : null);
       setSelectedIndices([]); // 撤销后清空选中
       return prev.slice(0, idx);
     });
@@ -1373,10 +1436,19 @@ const App: React.FC = () => {
         console.error('重做快照内容非法，未更新', last.jsonData);
         return prev.slice(0, -1);
       }
-      setUndoStack(u => [...u, { jsonData, bgImgPoints, backgroundImage }]);
+      setUndoStack(u => [...u, { jsonData, bgImgPoints, backgroundImage: backgroundImage ? {
+        x: backgroundImage.x,
+        y: backgroundImage.y,
+        scale: backgroundImage.scale,
+        rotation: backgroundImage.rotation,
+      } : null }]);
       setJsonDataWithClone(last.jsonData);
       setBgImgPoints(last.bgImgPoints);
-      setBackgroundImage(last.backgroundImage);
+      // 恢复 backgroundImage 的 x/y/scale/rotation，保留原有 texture
+      setBackgroundImage(prev => prev && last.backgroundImage ? {
+        ...prev,
+        ...last.backgroundImage
+      } : last.backgroundImage ? { ...last.backgroundImage, texture: null } : null);
       setSelectedIndices([]); // 重做后清空选中
       return prev.slice(0, -1);
     });
@@ -1398,191 +1470,96 @@ const App: React.FC = () => {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [jsonData, undoStack, redoStack]);
 
+  // 新增：监听selectedIndices和hoveredBlockIndex变化，自动启动tooltip计时器
+  useEffect(() => {
+    if (selectedIndices.length === 1 && hoveredBlockIndex === selectedIndices[0]) {
+      const block = jsonData.find(b => b.Index === hoveredBlockIndex);
+      if (!block) return;
+      if (blockTooltipTimer.current) clearTimeout(blockTooltipTimer.current);
+      blockTooltipTimer.current = setTimeout(() => {
+        setBlockTooltip(prev => ({ ...prev, visible: true, block }));
+      }, 2000);
+    } else {
+      if (blockTooltipTimer.current) {
+        clearTimeout(blockTooltipTimer.current);
+        blockTooltipTimer.current = null;
+      }
+      setBlockTooltip(prev => ({ ...prev, visible: false, block: null }));
+    }
+  }, [selectedIndices, hoveredBlockIndex]);
+
   console.log('App 组件已加载');
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider width={320} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2' }}>
-        <div style={{ padding: 24 }}>
-          {/* 新增：调节内容转向toggle按钮 */}
-          <div style={{ marginBottom: 16 }}>
-            <Switch checked={enableBlockRotate} onChange={setEnableBlockRotate} style={{ marginRight: 8 }} />
-            <span style={{ fontWeight: 600 }}>调节内容转向</span>
-          </div>
-          {/* 帮助按钮 */}
-          <Button type="link" style={{ float: 'right', marginBottom: 8 }} onClick={() => setHelpVisible(true)}>
-            帮助
-          </Button>
-          <Modal
-            title="操作说明"
-            open={helpVisible}
-            onCancel={() => setHelpVisible(false)}
-            footer={null}
-            width={600}
-            bodyStyle={{ maxHeight: 600, overflowY: 'auto' }}
-          >
-            <div style={{ fontSize: 16, lineHeight: 1.8 }}>
-              <ol style={{ paddingLeft: 20 }}>
-                <li style={{ marginBottom: 12 }}><b>动块操作</b>
-                  <ul style={{ marginTop: 6, marginBottom: 6 }}>
-                    <li><b>选择动块：</b> 单击动块（默认选中同一幕所有动块）；按住 <b>Shift</b> 键单击可多选/取消多选；侧边栏复选框也可多选/单选。</li>
-                    <li><b>拖拽动块：</b> 鼠标左键拖动选中动块移动。开启"可以移动单独动块"时，单选动块可独立拖动。</li>
-                    <li><b>旋转动块：</b> 选中动块后，按 <b>Q</b> 键动块逆时针旋转15°，长按1秒后持续旋转（每100ms旋转4°）；按 <b>E</b> 键动块顺时针旋转15°，长按1秒后持续旋转（每100ms旋转4°）。</li>
-                    <li><b>缩放视图：</b> 鼠标滚轮以鼠标位置为中心缩放画布。</li>
-                    <li><b>平移视图：</b> 鼠标右键按住画布拖动，实现无限平移。</li>
-                  </ul>
-                </li>
-                <li style={{ marginBottom: 12 }}><b>场地图片与打点</b>
-                  <ul style={{ marginTop: 6, marginBottom: 6 }}>
-                    <li><b>导入场地参考图：</b> 侧边栏"导入场地参考图"按钮，支持CAD或手绘PNG图片。</li>
-                    <li><b>打点模式：</b> 开启"场地图打点"后：
-                      <ul style={{ marginTop: 4, marginBottom: 4 }}>
-                        <li>鼠标左键点击图片依次打点，闭合后形成路径。</li>
-                        <li>闭合后，点击图片并拖动可移动图片。</li>
-                        <li>鼠标滚轮缩放图片。</li>
-                        <li><b>Q</b>键：图片逆时针旋转15°。</li>
-                        <li><b>E</b>键：图片顺时针旋转15°。</li>
-                        <li><b>A</b>键：按住持续放大图片。</li>
-                        <li><b>D</b>键：按住持续缩小图片。</li>
-                        <li><b>Esc</b>键：取消图片选中。</li>
-                      </ul>
-                    </li>
-                    <li><b>导入/导出点位：</b> 导入图片后自动弹窗选择同名点位JSON（支持新旧格式）；侧边栏"导出场地图点位"按钮可导出当前点位和图片缩放信息。</li>
-                  </ul>
-                </li>
-                <li style={{ marginBottom: 12 }}><b>其它辅助操作</b>
-                  <ul style={{ marginTop: 6, marginBottom: 6 }}>
-                    <li><b>数据导入导出：</b> 侧边栏"导入JSON"按钮导入动块数据，"导出JSON"按钮导出当前动块数据。</li>
-                    <li><b>入口/出口显示：</b> 侧边栏可切换"显示入口""显示出口"开关。</li>
-                    <li><b>辅助信息：</b> 画布中心始终显示红色锚点和坐标标签，辅助网格便于空间定位。</li>
-                  </ul>
-                </li>
-              </ol>
-            </div>
-          </Modal>
-          {/* 功能开关区 */}
-          <div style={{ marginBottom: 24, padding: '8px 0' }}>
-            <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>显示与操作</div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div>
-                <Switch checked={moveSingleBlock} onChange={setMoveSingleBlock} style={{ marginRight: 8 }} />
-                <span>可以移动单独动块</span>
-              </div>
-              <div>
-                <Switch checked={showEntrance} onChange={setShowEntrance} style={{ marginRight: 8 }} />
-                <span>显示入口</span>
-              </div>
-              <div>
-                <Switch checked={showExit} onChange={setShowExit} style={{ marginRight: 8 }} />
-                <span>显示出口</span>
-              </div>
-              <div>
-                <Switch checked={enableBgImgPoint} onChange={setEnableBgImgPoint} style={{ marginRight: 8 }} />
-                <span>场地图打点</span>
-              </div>
-            </div>
-          </div>
-          {/* 数据导入导出区 */}
-          <div style={{ marginBottom: 32 }}>
-            <Card bordered={false} style={{ marginBottom: 20, borderRadius: 12, boxShadow: '0 2px 8px #f0f1f2' }}>
-              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>数据导入</div>
-              <Upload {...uploadPlayAreaProps} style={{ width: '100%' }}>
-                <Button icon={<UploadOutlined />} type="primary" block size="large" style={{ marginBottom: 10, borderRadius: 8 }}>
-                  导入playarea.json
-                </Button>
-              </Upload>
-              <Upload {...uploadBlockDetailProps} style={{ width: '100%' }}>
-                <Button icon={<UploadOutlined />} type="dashed" block size="large" style={{ borderRadius: 8 }}>
-                  导入PlayAreaBlockData.json
-                </Button>
-              </Upload>
-            </Card>
-            <Card bordered={false} style={{ marginBottom: 20, borderRadius: 12, boxShadow: '0 2px 8px #f0f1f2' }}>
-              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>场地图片与点位</div>
-              <Upload {...bgImgUploadProps} style={{ width: '100%' }}>
-                <Button icon={<PictureOutlined />} block size="large" style={{ marginBottom: 10, borderRadius: 8 }}>
-                  导入场地参考图
-                </Button>
-              </Upload>
-              <Button block size="large" style={{ borderRadius: 8 }} onClick={handleExportBgImgPoints}>
-                导出场地图点位
-              </Button>
-            </Card>
-            <Card bordered={false} style={{ borderRadius: 12, boxShadow: '0 2px 8px #f0f1f2' }}>
-              <div style={{ fontWeight: 700, fontSize: 17, marginBottom: 14 }}>数据导出</div>
-              <Button icon={<DownloadOutlined />} block size="large" style={{ marginBottom: 10, borderRadius: 8 }} onClick={handleExportPlayArea}>
-                导出playarea.json
-              </Button>
-              <Button icon={<DownloadOutlined />} type="dashed" block size="large" style={{ borderRadius: 8 }} onClick={handleExportBlockDetail}>
-                导出PlayAreaBlockData.json
-              </Button>
-            </Card>
-          </div>
-          <Divider />
-          {/* Hierarchy 视图 */}
-          <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>动块层级（多选）</div>
-          <Card bordered={false} style={{ marginBottom: 16, maxHeight: 600, overflow: 'auto' }}>
-            <List
-              dataSource={jsonData}
-              renderItem={item => (
-                <List.Item>
-                  <Checkbox
-                    checked={selectedIndices.includes(item.Index)}
-                    onChange={e => handleSelectBlock(item.Index, e.target.checked)}
-                  >
-                    <span style={{ fontWeight: selectedIndices.includes(item.Index) ? 'bold' : undefined }}>
-                      #{item.Index} {item.Name}
-                    </span>
-                  </Checkbox>
-                </List.Item>
-              )}
+      <Sider width={220} style={{ background: '#fff', boxShadow: '2px 0 8px #f0f1f2', height: '100vh', overflow: 'auto' }}>
+        <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}>
+          <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+            <Sidebar
+              selectedIndices={selectedIndices}
+              jsonData={jsonData}
+              handleSelectBlock={handleSelectBlock}
+              blockDetailData={blockDetailData}
             />
-          </Card>
-          <Divider />
-          {selectedIndices.length === 1 ? (
-            (() => {
-              const selectedBlock = jsonData.find(b => b.Index === selectedIndices[0]);
-              return selectedBlock ? (
-                <div style={{ marginBottom: 16 }}>
-                  <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>{`动块信息 #${selectedBlock.Index}`}</div>
-                  <Card bordered={false}>
-                    <ul style={{margin: 0, paddingLeft: 18}}>
-                      {Object.entries(selectedBlock).map(([key, value]) => (
-                        <li key={key} style={{fontSize: 13, marginBottom: 2}}>
-                          <b>{key}：</b>{typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                        </li>
-                      ))}
-                    </ul>
-                  </Card>
-                </div>
-              ) : null;
-            })()
-          ) : (
-            <Card bordered={false} style={{ marginBottom: 16, textAlign: 'center', color: '#aaa' }}>
-              {selectedIndices.length === 0 ? '暂未选中动块' : `已选中${selectedIndices.length}个动块`}
-            </Card>
-          )}
-          <Divider />
-          <div style={{ color: '#888', fontSize: 12, textAlign: 'center' }}>
-            Powered by React + PixiJS + Ant Design
           </div>
         </div>
       </Sider>
+      
       <Content style={{ background: '#222', height: '100vh', overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div
-          ref={pixiContainer}
-          style={{
-            width: '100%',
-            height: '100%',
-            minWidth: 800,
-            minHeight: 600,
-            background: '#222',
-            borderRadius: 8,
-            boxShadow: '0 2px 16px #0002',
-            position: 'relative',
-          }}
-        />
+        <CanvasView pixiContainer={pixiContainer} style={{
+          width: '100%',
+          height: '100%',
+          minWidth: 800,
+          minHeight: 600,
+          background: '#222',
+          borderRadius: 8,
+          boxShadow: '0 2px 16px #0002',
+          position: 'relative',
+        }} />
       </Content>
+
+      <Sider width={200} style={{ background: '#fff', boxShadow: '-2px 0 8px #f0f1f2', height: '100vh', overflow: 'auto' }}>
+        <RightSider
+          uploadPlayAreaProps={uploadPlayAreaProps}
+          uploadBlockDetailProps={uploadBlockDetailProps}
+          bgImgUploadProps={bgImgUploadProps}
+          handleExportBgImgPoints={handleExportBgImgPoints}
+          handleExportPlayArea={handleExportPlayArea}
+          handleExportBlockDetail={handleExportBlockDetail}
+          enableBlockRotate={enableBlockRotate}
+          setEnableBlockRotate={setEnableBlockRotate}
+          moveSingleBlock={moveSingleBlock}
+          setMoveSingleBlock={setMoveSingleBlock}
+          showEntrance={showEntrance}
+          setShowEntrance={setShowEntrance}
+          showExit={showExit}
+          setShowExit={setShowExit}
+          enableBgImgPoint={enableBgImgPoint}
+          setEnableBgImgPoint={setEnableBgImgPoint}
+          helpVisible={helpVisible}
+          setHelpVisible={setHelpVisible}
+        />
+      </Sider>
+      {blockTooltip.visible && blockTooltip.block && (
+        <div
+          style={{
+            position: 'fixed',
+            left: blockTooltip.x + 16,
+            top: blockTooltip.y + 16,
+            zIndex: 9999,
+            background: 'rgba(255,255,255,0.98)',
+            border: '1px solid #eee',
+            borderRadius: 8,
+            boxShadow: '0 2px 12px #0002',
+            padding: 12,
+            pointerEvents: 'none',
+            minWidth: 260,
+            maxWidth: 400
+          }}
+        >
+          <BlockDetailContent block={blockTooltip.block} />
+        </div>
+      )}
     </Layout>
   );
 };
