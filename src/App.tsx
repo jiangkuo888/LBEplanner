@@ -47,10 +47,6 @@ const App: React.FC = () => {
   const rotateTimerRef = useRef<NodeJS.Timeout | null>(null);
   const rotateDelayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isRDownRef = useRef(false);
-  const selectedIndicesRef = useRef(selectedIndices);
-  const jsonDataRef = useRef(jsonData);
-  useEffect(() => { selectedIndicesRef.current = selectedIndices; }, [selectedIndices]);
-  useEffect(() => { jsonDataRef.current = jsonData; }, [jsonData]);
   const [moveSingleBlock, setMoveSingleBlock] = useState(false);
   const [showEntrance, setShowEntrance] = useState(false); // 默认隐藏入口
   const [showExit, setShowExit] = useState(false); // 默认隐藏出口
@@ -76,6 +72,34 @@ const App: React.FC = () => {
   // 修复：用ref同步needUpdateIndices，保证setJsonData回调里拿到最新值
   const needUpdateIndicesRef = useRef(needUpdateIndices);
   useEffect(() => { needUpdateIndicesRef.current = needUpdateIndices; }, [needUpdateIndices]);
+  // 1. 定义快照结构和撤销/重做栈
+  interface EditorSnapshot {
+    jsonData: any[];
+    bgImgPoints: {x: number, y: number}[];
+    backgroundImage: typeof backgroundImage;
+  }
+  const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([]);
+
+  // 2. 深拷贝工具
+  function deepClone(obj: any) {
+    return JSON.parse(JSON.stringify(obj));
+  }
+  // 3. pushUndo 工具函数
+  function pushUndo() {
+    const current = JSON.stringify(jsonData);
+    const lastSnap = undoStack.length > 0 ? JSON.stringify(undoStack[undoStack.length - 1].jsonData) : null;
+    if (!Array.isArray(jsonData) || jsonData.length === 0) return;
+    if (current === lastSnap) return; // 只有数据变化时才 push
+    const snap = {
+      jsonData: deepClone(jsonData),
+      bgImgPoints: deepClone(bgImgPoints),
+      backgroundImage: deepClone(backgroundImage),
+    };
+    console.log('pushUndo 快照:', JSON.stringify(snap));
+    setUndoStack(stack => [...stack, snap]);
+    setRedoStack([]);
+  }
 
   // 多选逻辑
   const handleSelectBlock = (index: number, checked: boolean) => {
@@ -216,6 +240,7 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    console.log('PixiJS 渲染 useEffect 触发，jsonData:', jsonData);
     if (!pixiReady) return;
     const layer = blocksLayer.current;
     if (!layer) return;
@@ -590,14 +615,16 @@ const App: React.FC = () => {
         const dx = event.global.x - dragStartRef.current.x;
         const dy = event.global.y - dragStartRef.current.y;
         if (Math.sqrt(dx * dx + dy * dy) > DRAG_THRESHOLD) {
-          // 超过阈值，开始拖拽
           dragStartedRef.current = true;
+          // 只在拖拽真正开始时 pushUndo 一次
+          pushUndo();
           const mx = (event.global.x - offsetX) / scale;
           const my = (event.global.y - offsetY) / scale;
           dragInfo.current = {
             blockIndex: dragStartRef.current.blockIndex,
-            offset: { x: mx, y: my },
+            offset: { x: mx, y: my }
           };
+          
         }
       }
       if (!dragInfo.current) return;
@@ -608,20 +635,26 @@ const App: React.FC = () => {
       const my = (event.global.y - offsetY) / scale;
       const dx = mx - offset.x;
       const dy = my - offset.y;
-      setJsonData(prev => {
-        const newArr = [...prev];
-        indices.forEach(idx => {
-          const bIdx = newArr.findIndex(b => b.Index === idx);
-          if (bIdx !== -1) {
-            const b = { ...newArr[bIdx] };
-            b.Points = b.Points.map((p: any) => ({ Point: { X: p.Point.X + dx, Y: p.Point.Y + dy } }));
-            b.Entrance = { Point: { X: b.Entrance.Point.X + dx, Y: b.Entrance.Point.Y + dy } };
-            b.Exit = { Point: { X: b.Exit.Point.X + dx, Y: b.Exit.Point.Y + dy } };
-            newArr[bIdx] = b;
-          }
-        });
-        return newArr;
-      });
+      // 日志：多选拖拽
+      // console.log('多选拖拽 pushUndo 前 jsonData:', JSON.stringify(jsonData));
+      // pushUndo(); // <-- 删除这行
+      setJsonData(prev => prev.map(b => {
+        if (!indices.includes(b.Index)) return b;
+        if (!Array.isArray(b.Points) || b.Points.length === 0 || !b.Points.every((p: any) => p && p.Point && typeof p.Point.X === 'number' && typeof p.Point.Y === 'number')) {
+          return b;
+        }
+        return {
+          ...b,
+          Points: b.Points.map((p: any) => ({
+            Point: {
+              X: p.Point.X + dx,
+              Y: p.Point.Y + dy
+            }
+          })),
+          Entrance: { Point: { X: b.Entrance.Point.X + dx, Y: b.Entrance.Point.Y + dy } },
+          Exit: { Point: { X: b.Exit.Point.X + dx, Y: b.Exit.Point.Y + dy } }
+        };
+      }));
       dragInfo.current = {
         blockIndex,
         offset: {
@@ -910,6 +943,7 @@ const App: React.FC = () => {
 
   // 批量旋转按钮
   const handleRotate = () => {
+    console.log('handleRotate 被调用');
     if(selectedIndices.length > 0) {
       // 1. 计算所有选中动块所有点的整体中心点
       let allPoints: { x: number, y: number, blockIdx: number, type: 'vertex'|'entrance'|'exit', pointIdx?: number }[] = [];
@@ -926,6 +960,8 @@ const App: React.FC = () => {
       // 2. 旋转角度（15度）
       const angle = 15 * Math.PI / 180;
       // 3. 旋转所有点
+      console.log('pushUndo 前 jsonData:', JSON.stringify(jsonData));
+      pushUndo(); // 先快照
       setJsonData(prev => prev.map(b => {
         if (!selectedIndices.includes(b.Index)) return b;
         // 旋转所有点（以整体中心点为圆心）
@@ -966,6 +1002,9 @@ const App: React.FC = () => {
           return { ...b, Points: newPoints, Entrance: newEntrance, Exit: newExit, DeltaYaw: newDeltaYaw };
         }
       }));
+      setTimeout(() => {
+        console.log('pushUndo 后 jsonData:', JSON.stringify(jsonData));
+      }, 100);
     }
   };
 
@@ -980,8 +1019,9 @@ const App: React.FC = () => {
   };
 
   const rotateSelectedBlocks = (angleDeg: number) => {
-    const indices = selectedIndicesRef.current;
-    const data = jsonDataRef.current;
+    console.log('rotateSelectedBlocks 被调用，angleDeg:', angleDeg, 'selectedIndices:', selectedIndices);
+    const indices = selectedIndices;
+    const data = jsonData;
     if(indices.length > 0) {
       // 计算所有选中动块所有点的整体中心点
       let allPoints: { x: number, y: number }[] = [];
@@ -996,6 +1036,7 @@ const App: React.FC = () => {
       const centerX = allPoints.reduce((sum: number, p: any) => sum + p.x, 0) / allPoints.length;
       const centerY = allPoints.reduce((sum: number, p: any) => sum + p.y, 0) / allPoints.length;
       const angle = angleDeg * Math.PI / 180;
+      pushUndo();
       setJsonData(prev => prev.map(b => {
         if (!indices.includes(b.Index)) return b;
         const newPoints = b.Points.map((p: any, idx: any) => {
@@ -1035,6 +1076,13 @@ const App: React.FC = () => {
   // Q/E键旋转控制
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      console.log('handleKeyDown 触发', e.key);
+      if ((e.key === 'q' || e.key === 'Q') && !isRDownRef.current) {
+        console.log('Q 被按下');
+      }
+      if ((e.key === 'e' || e.key === 'E') && !isRDownRef.current) {
+        console.log('E 被按下');
+      }
       if (e.key === 'Shift') setIsShiftDown(true);
       if (e.key === 'q' || e.key === 'Q') {
         if (!isRDownRef.current) {
@@ -1109,7 +1157,7 @@ const App: React.FC = () => {
       if (rotateDelayTimeoutRef.current) clearTimeout(rotateDelayTimeoutRef.current);
       if (rotateTimerRef.current) clearInterval(rotateTimerRef.current);
     };
-  }, []);
+  }, [selectedIndices, jsonData, undoStack, redoStack]);
 
   // 交互：拖拽/缩放/旋转图片
   useEffect(() => {
@@ -1266,6 +1314,71 @@ const App: React.FC = () => {
     setNeedUpdateIndices(updateList);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedIndices, enableBlockRotate]);
+
+  // 4. handleUndo/handleRedo
+  function setJsonDataWithClone(newData: any[]) {
+    const cloned = deepClone(newData);
+    setJsonData(cloned);
+    setTimeout(() => {
+      console.log('setJsonDataWithClone 后 jsonData:', JSON.stringify(cloned));
+    }, 100);
+  }
+  function handleUndo() {
+    setUndoStack(prev => {
+      if (prev.length === 0) return prev;
+      let idx = prev.length - 1;
+      let last = prev[idx];
+      while (idx >= 0 && JSON.stringify(last.jsonData) === JSON.stringify(jsonData)) {
+        idx--;
+        last = prev[idx];
+      }
+      if (!last || !Array.isArray(last.jsonData) || last.jsonData.length === 0) {
+        console.error('撤销快照内容非法，未更新', last?.jsonData);
+        return prev.slice(0, idx + 1);
+      }
+      console.log('撤销到快照:', JSON.stringify(last.jsonData), '当前:', JSON.stringify(jsonData));
+      setRedoStack(r => [...r, { jsonData, bgImgPoints, backgroundImage }]);
+      setJsonDataWithClone(last.jsonData);
+      setBgImgPoints(last.bgImgPoints);
+      setBackgroundImage(last.backgroundImage);
+      setSelectedIndices([]); // 撤销后清空选中
+      return prev.slice(0, idx);
+    });
+  }
+  function handleRedo() {
+    setRedoStack(prev => {
+      if (prev.length === 0) return prev;
+      const last = prev[prev.length - 1];
+      if (!Array.isArray(last.jsonData) || last.jsonData.length === 0) {
+        console.error('重做快照内容非法，未更新', last.jsonData);
+        return prev.slice(0, -1);
+      }
+      setUndoStack(u => [...u, { jsonData, bgImgPoints, backgroundImage }]);
+      setJsonDataWithClone(last.jsonData);
+      setBgImgPoints(last.bgImgPoints);
+      setBackgroundImage(last.backgroundImage);
+      setSelectedIndices([]); // 重做后清空选中
+      return prev.slice(0, -1);
+    });
+  }
+
+  // 7. 快捷键支持
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        handleUndo();
+      }
+      if (((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
+        e.preventDefault();
+        handleRedo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [jsonData, undoStack, redoStack]);
+
+  console.log('App 组件已加载');
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
