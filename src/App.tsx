@@ -300,11 +300,17 @@ const App: React.FC = () => {
             // 已闭合，允许选中并拖拽图片
             setBgImgSelected(true);
             setBgImgDragging(true);
-            const mx = (event.global.x - offsetX) / scale;
-            const my = (event.global.y - offsetY) / scale;
+            // 修正：统一pointerdown和pointermove的坐标系
+            const container = pixiContainer.current;
+            const rect = container?.getBoundingClientRect();
+            const origEvt = event.data && (event.data.originalEvent as unknown as MouseEvent | PointerEvent);
+            const mx = (origEvt ? origEvt.clientX : 0) - (rect?.left ?? 0) - offsetX;
+            const my = (origEvt ? origEvt.clientY : 0) - (rect?.top ?? 0) - offsetY;
+            const mxWorld = mx / scale;
+            const myWorld = my / scale;
             setBgImgDragOffset({
-              x: mx - backgroundImage.x,
-              y: my - backgroundImage.y,
+              x: mxWorld - backgroundImage.x,
+              y: myWorld - backgroundImage.y,
             });
           }
         });
@@ -401,12 +407,26 @@ const App: React.FC = () => {
           const ry = sx * Math.sin(backgroundImage.rotation) + sy * Math.cos(backgroundImage.rotation);
           const wx = backgroundImage.x + rx;
           const wy = backgroundImage.y + ry;
-          // 再变换到画布坐标
+          // 画布坐标
           const cx = wx * scale + offsetX;
           const cy = wy * scale + offsetY;
           const g = new PIXI.Graphics();
           g.beginFill(0xff1744, 1).drawCircle(cx, cy, 8).endFill();
-          g.interactive = false;
+          // 新增：第一个点可点击闭合
+          if (i === 0 && !isClosed && enableBgImgPoint) {
+            g.interactive = true;
+            (g as any).buttonMode = true;
+            g.on('pointerdown', () => {
+              if (bgImgPoints.length > 2) {
+                setBgImgPoints(prev => {
+                  const first = prev[0];
+                  const last = prev[prev.length - 1];
+                  if (Math.abs(first.x - last.x) < 1e-6 && Math.abs(first.y - last.y) < 1e-6) return prev;
+                  return [...prev, { x: first.x, y: first.y }];
+                });
+              }
+            });
+          }
           layer.addChild(g as unknown as PIXI.DisplayObject);
         }
       }
