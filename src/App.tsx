@@ -858,9 +858,9 @@ const App: React.FC = () => {
       }
     });
     // 在画布中心(0,0)绘制十字和标签，确保在最上层
-    const crossLen = 30;
+    const crossLen = 15; // 从30缩小到15
     const crossColor = 0xff1744; // 红色
-    const crossThickness = 5;
+    const crossThickness = 3; // 从5缩小到3
     const zeroX = 0 * scale + offsetX;
     const zeroY = 0 * scale + offsetY;
     const cross = new PIXI.Graphics();
@@ -870,6 +870,20 @@ const App: React.FC = () => {
       .moveTo(zeroX, zeroY - crossLen)
       .lineTo(zeroX, zeroY + crossLen);
     layer.addChild(cross as unknown as PIXI.DisplayObject);
+    
+    // 在十字下方绘制箭头表示场地正方向
+    const arrowSize = 8; // 从15缩小到8
+    const arrowY = zeroY + crossLen + 5; // 从10缩小到5
+    const arrow = new PIXI.Graphics();
+    arrow.lineStyle(crossThickness, crossColor, 1)
+      .beginFill(crossColor, 1)
+      .moveTo(zeroX, arrowY + arrowSize) // 箭头尖端（朝下）
+      .lineTo(zeroX - arrowSize/2, arrowY) // 箭头左翼
+      .lineTo(zeroX + arrowSize/2, arrowY) // 箭头右翼
+      .closePath()
+      .endFill();
+    layer.addChild(arrow as unknown as PIXI.DisplayObject);
+    
     const centerText = new PIXI.Text('场地锚点', {
       fontSize: 20,
       fill: crossColor,

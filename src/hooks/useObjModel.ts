@@ -38,7 +38,7 @@ export function useObjModel(): UseObjModelReturn {
 
       const model2D = convert3DTo2D(objModel);
       
-      // 自动缩放，但不进行居中偏移
+      // 将模型单位放大100倍（厘米转米）
       const { bounds } = model2D;
       const modelWidth = bounds.maxX - bounds.minX;
       const modelHeight = bounds.maxY - bounds.minY;
@@ -47,77 +47,28 @@ export function useObjModel(): UseObjModelReturn {
       
       // 检查模型尺寸是否有效
       if (isNaN(modelWidth) || isNaN(modelHeight) || modelWidth === 0 || modelHeight === 0) {
-        console.warn('模型尺寸无效，跳过自动缩放');
-        // 如果模型尺寸为0，设置一个默认的最小尺寸，但不偏移
-        if (modelWidth === 0 || modelHeight === 0) {
-          const defaultSize = 100;
-          const transformedModel = applyWorldTransform(model2D, {
-            scale: defaultSize / Math.max(modelWidth || 1, modelHeight || 1),
-            offsetX: 0, // 不偏移，保持(0,0,0)对齐
-            offsetY: 0
-          });
-          setModel2D(transformedModel);
-          console.log('应用默认缩放:', { defaultSize, originalSize: { width: modelWidth, height: modelHeight } });
-        } else {
-          setModel2D(model2D);
-        }
+        console.warn('模型尺寸无效，使用原始模型');
+        setModel2D(model2D);
         message.success(`OBJ模型加载成功: ${objModel.vertices.length}个顶点, ${objModel.faces.length}个面，已对齐到场地锚点`);
         return;
       }
       
-      // 单位转换：如果模型尺寸小于10，可能是厘米或毫米单位，需要转换为米
-      let unitScale = 1;
-      if (modelWidth < 10 && modelHeight < 10) {
-        // 可能是厘米单位，转换为米
-        unitScale = 100;
-        console.log('检测到小尺寸模型，应用厘米到米的单位转换');
-      } else if (modelWidth < 1 && modelHeight < 1) {
-        // 可能是毫米单位，转换为米
-        unitScale = 1000;
-        console.log('检测到极小尺寸模型，应用毫米到米的单位转换');
-      }
+      // 将模型单位放大100倍（厘米转米）
+      const scale = 100;
+      const transformedModel = applyWorldTransform(model2D, {
+        scale: scale,
+        offsetX: 0, // 不偏移，保持(0,0,0)对齐到场地锚点
+        offsetY: 0
+      });
+      setModel2D(transformedModel);
+      console.log('应用单位转换（厘米转米）:', { 
+        scale,
+        originalSize: { width: modelWidth, height: modelHeight },
+        scaledSize: { width: modelWidth * scale, height: modelHeight * scale },
+        bounds
+      });
       
-      // 如果模型太大或太小，自动调整缩放
-      let autoScale = 1;
-      const maxSize = 1000; // 最大尺寸（米）
-      const minSize = 10;   // 最小尺寸（米）
-      
-      const scaledWidth = modelWidth * unitScale;
-      const scaledHeight = modelHeight * unitScale;
-      
-      if (scaledWidth > maxSize || scaledHeight > maxSize) {
-        autoScale = maxSize / Math.max(scaledWidth, scaledHeight);
-      } else if (scaledWidth < minSize && scaledHeight < minSize) {
-        autoScale = minSize / Math.min(scaledWidth, scaledHeight);
-      }
-      
-      // 检查autoScale是否有效
-      if (isNaN(autoScale) || !isFinite(autoScale)) {
-        console.warn('自动缩放比例无效，使用默认值');
-        autoScale = 1;
-      }
-      
-      // 应用单位转换和自动缩放，但不进行任何偏移
-      const finalScale = unitScale * autoScale;
-      if (finalScale !== 1) {
-        const transformedModel = applyWorldTransform(model2D, {
-          scale: finalScale,
-          offsetX: 0, // 不偏移，保持(0,0,0)对齐到场地锚点
-          offsetY: 0
-        });
-        setModel2D(transformedModel);
-        console.log('应用单位转换和缩放:', { 
-          unitScale, 
-          autoScale, 
-          finalScale, 
-          originalSize: { width: modelWidth, height: modelHeight },
-          scaledSize: { width: scaledWidth, height: scaledHeight }
-        });
-      } else {
-        setModel2D(model2D);
-      }
-      
-      message.success(`OBJ模型加载成功: ${objModel.vertices.length}个顶点, ${objModel.faces.length}个面，已对齐到场地锚点`);
+      message.success(`OBJ模型加载成功: ${objModel.vertices.length}个顶点, ${objModel.faces.length}个面，已对齐到场地锚点（厘米转米）`);
     } catch (error) {
       console.error('OBJ文件解析失败:', error);
       message.error('OBJ文件解析失败，请检查文件格式');
