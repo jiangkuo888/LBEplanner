@@ -9,6 +9,9 @@ import CanvasView from './components/CanvasView';
 import RightSider from './components/RightSider';
 import BlockList from './components/BlockList';
 import { BlockDetailContent } from './components/BlockDetail';
+import { useObjModel } from './hooks/useObjModel';
+import { OriginInfo } from './types';
+import { parseOriginFile, quaternionToEuler, radiansToDegrees } from './utils/originParser';
 
 const { Sider, Content } = Layout;
 const { Title, Text } = Typography;
@@ -78,6 +81,21 @@ const App: React.FC = () => {
   // 修复：用ref同步needUpdateIndices，保证setJsonData回调里拿到最新值
   const needUpdateIndicesRef = useRef(needUpdateIndices);
   useEffect(() => { needUpdateIndicesRef.current = needUpdateIndices; }, [needUpdateIndices]);
+  
+  // 新增：OBJ模型管理
+  const {
+    model2D,
+    renderOptions: modelRenderOptions,
+    isLoading: modelLoading,
+    loadObjFile,
+    updateRenderOptions: updateModelRenderOptions,
+    clearModel,
+    applyTransform: applyModelTransform
+  } = useObjModel();
+  
+  // 新增：原点信息管理
+  const [originInfo, setOriginInfo] = useState<OriginInfo | null>(null);
+  
   // 1. 定义快照结构和撤销/重做栈
   interface EditorSnapshot {
     jsonData: any[];
@@ -265,6 +283,236 @@ const App: React.FC = () => {
     if (!layer) return;
     layer.removeChildren();
     const { scale, offsetX, offsetY } = viewTransform;
+    
+    // 新增：渲染OBJ模型
+    if (model2D && modelRenderOptions && modelRenderOptions.visible) {
+      const graphics = new PIXI.Graphics();
+      const { color, lineWidth, fillAlpha, opacity } = modelRenderOptions;
+      
+      // 设置透明度
+      graphics.alpha = opacity;
+      
+      // 计算模型的边界和缩放
+      const modelWidth = model2D.bounds.maxX - model2D.bounds.minX;
+      const modelHeight = model2D.bounds.maxY - model2D.bounds.minY;
+      const modelCenterX = model2D.center.x;
+      const modelCenterY = model2D.center.y;
+      
+      // 计算模型在画布中的位置
+      const canvasCenterX = modelCenterX * scale + offsetX;
+      const canvasCenterY = modelCenterY * scale + offsetY;
+      
+      // 渲染每个面
+      for (const face of model2D.faces) {
+        if (face.vertices.length < 3) continue;
+        
+        // 获取面的顶点
+        const faceVertices = face.vertices.map(vertexIndex => {
+          const vertex = model2D.vertices[vertexIndex];
+          if (!vertex) return null;
+          
+          // 应用视图变换
+          return {
+            x: vertex.x * scale + offsetX,
+            y: vertex.y * scale + offsetY
+          };
+        }).filter(Boolean) as { x: number; y: number }[];
+        
+        if (faceVertices.length < 3) continue;
+        
+        // 绘制面
+        graphics.lineStyle(lineWidth, color, 0.8);
+        graphics.beginFill(color, fillAlpha);
+        graphics.moveTo(faceVertices[0].x, faceVertices[0].y);
+        
+        for (let i = 1; i < faceVertices.length; i++) {
+          graphics.lineTo(faceVertices[i].x, faceVertices[i].y);
+        }
+        
+        graphics.closePath();
+        graphics.endFill();
+      }
+      
+      // 添加到图层
+      layer.addChild(graphics as unknown as PIXI.DisplayObject);
+      
+      // 添加边长标注 - 只标注最外层边界的边长
+      const edgeLabels: PIXI.Text[] = [];
+      const processedEdges = new Map<string, {
+        v1: { x: number; y: number };
+        v2: { x: number; y: number };
+        length: number;
+        count: number;
+      }>();
+      
+      // 第一步：收集所有边并统计出现次数
+      for (const face of model2D.faces) {
+        if (face.vertices.length < 3) continue;
+        
+        for (let i = 0; i < face.vertices.length; i++) {
+          const currentIndex = face.vertices[i];
+          const nextIndex = face.vertices[(i + 1) % face.vertices.length];
+          
+          const currentVertex = model2D.vertices[currentIndex];
+          const nextVertex = model2D.vertices[nextIndex];
+          
+          if (!currentVertex || !nextVertex) continue;
+          
+          // 使用坐标创建边的唯一标识符（四舍五入到小数点后3位）
+          const v1x = Math.round(currentVertex.x * 1000) / 1000;
+          const v1y = Math.round(currentVertex.y * 1000) / 1000;
+          const v2x = Math.round(nextVertex.x * 1000) / 1000;
+          const v2y = Math.round(nextVertex.y * 1000) / 1000;
+          
+          // 创建边的唯一标识符（按坐标排序）
+          const edgeKey = v1x < v2x || (v1x === v2x && v1y < v2y) 
+            ? `${v1x},${v1y}-${v2x},${v2y}`
+            : `${v2x},${v2y}-${v1x},${v1y}`;
+          
+          // 计算边的世界坐标长度（米）
+          const worldLength = Math.sqrt(
+            Math.pow(nextVertex.x - currentVertex.x, 2) + 
+            Math.pow(nextVertex.y - currentVertex.y, 2)
+          );
+          
+          if (processedEdges.has(edgeKey)) {
+            processedEdges.get(edgeKey)!.count++;
+          } else {
+            processedEdges.set(edgeKey, {
+              v1: currentVertex,
+              v2: nextVertex,
+              length: worldLength,
+              count: 1
+            });
+          }
+        }
+      }
+      
+      // 第二步：只标注外边界的长边（出现次数为1的边，且长度大于1米）
+      for (const [edgeKey, edge] of Array.from(processedEdges.entries())) {
+        // 只标注外边界（出现次数为1）且长度大于1米的边
+        if (edge.count === 1 && edge.length > 1) {
+          // 计算边的中点位置
+          const midX = (edge.v1.x + edge.v2.x) / 2 * scale + offsetX;
+          const midY = (edge.v1.y + edge.v2.y) / 2 * scale + offsetY;
+          
+          // 创建标注文本
+          const labelText = `${edge.length.toFixed(1)}m`;
+          const label = new PIXI.Text(labelText, {
+            fontSize: 12,
+            fill: 0xffffff,
+            fontWeight: 'bold',
+            align: 'center',
+            stroke: 0x000000,
+            strokeThickness: 2
+          });
+          
+          label.anchor.set(0.5);
+          label.x = midX;
+          label.y = midY - 8; // 稍微向上偏移，避免遮挡边线
+          
+          edgeLabels.push(label);
+          layer.addChild(label as unknown as PIXI.DisplayObject);
+        }
+      }
+      
+      console.log('OBJ模型已渲染:', { 
+        面数: model2D.faces.length, 
+        顶点数: model2D.vertices.length, 
+        尺寸: { width: modelWidth, height: modelHeight },
+        总边数: processedEdges.size,
+        外边界边数: Array.from(processedEdges.values()).filter(edge => edge.count === 1).length,
+        标注数量: edgeLabels.length
+      });
+    } else {
+      console.log('OBJ模型未渲染:', { model2D: !!model2D, modelRenderOptions: !!modelRenderOptions, visible: modelRenderOptions?.visible });
+    }
+    
+    // 新增：渲染原点信息
+    if (originInfo) {
+      // 原点位置（世界坐标）
+      const originX = originInfo.x * scale + offsetX;
+      const originY = originInfo.y * scale + offsetY;
+      
+      // 绘制原点标记（红色十字）
+      const originCrossLen = 40;
+      const originCrossColor = 0xff0000; // 红色
+      const originCrossThickness = 6;
+      
+      const originCross = new PIXI.Graphics();
+      originCross.lineStyle(originCrossThickness, originCrossColor, 1)
+        .moveTo(originX - originCrossLen, originY)
+        .lineTo(originX + originCrossLen, originY)
+        .moveTo(originX, originY - originCrossLen)
+        .lineTo(originX, originY + originCrossLen);
+      layer.addChild(originCross as unknown as PIXI.DisplayObject);
+      
+      // 绘制原点圆圈
+      const originCircle = new PIXI.Graphics();
+      originCircle.lineStyle(4, originCrossColor, 1)
+        .beginFill(originCrossColor, 0.3)
+        .drawCircle(originX, originY, 20)
+        .endFill();
+      layer.addChild(originCircle as unknown as PIXI.DisplayObject);
+      
+      // 绘制原点标签
+      const originText = new PIXI.Text('原点', {
+        fontSize: 24,
+        fill: originCrossColor,
+        fontWeight: 'bold',
+        align: 'center',
+        stroke: 0x000000,
+        strokeThickness: 4
+      });
+      originText.anchor.set(0.5);
+      originText.x = originX;
+      originText.y = originY - originCrossLen - 25;
+      layer.addChild(originText as unknown as PIXI.DisplayObject);
+      
+      // 绘制原点坐标信息
+      const coordText = new PIXI.Text(`(${originInfo.x.toFixed(2)}, ${originInfo.y.toFixed(2)}, ${originInfo.z.toFixed(2)})`, {
+        fontSize: 16,
+        fill: originCrossColor,
+        fontWeight: 'bold',
+        align: 'center',
+        stroke: 0x000000,
+        strokeThickness: 2
+      });
+      coordText.anchor.set(0.5);
+      coordText.x = originX;
+      coordText.y = originY + originCrossLen + 25;
+      layer.addChild(coordText as unknown as PIXI.DisplayObject);
+      
+      // 绘制旋转信息（如果旋转不为0）
+      if (originInfo.rx !== 0 || originInfo.ry !== 0 || originInfo.rz !== 0) {
+        const euler = quaternionToEuler(originInfo);
+        const eulerDegrees = {
+          x: radiansToDegrees(euler.x),
+          y: radiansToDegrees(euler.y),
+          z: radiansToDegrees(euler.z)
+        };
+        
+        const rotationText = new PIXI.Text(`旋转: (${eulerDegrees.x.toFixed(1)}°, ${eulerDegrees.y.toFixed(1)}°, ${eulerDegrees.z.toFixed(1)}°)`, {
+          fontSize: 14,
+          fill: originCrossColor,
+          fontWeight: 'bold',
+          align: 'center',
+          stroke: 0x000000,
+          strokeThickness: 2
+        });
+        rotationText.anchor.set(0.5);
+        rotationText.x = originX;
+        rotationText.y = originY + originCrossLen + 45;
+        layer.addChild(rotationText as unknown as PIXI.DisplayObject);
+      }
+      
+      console.log('原点信息已渲染:', { 
+        位置: { x: originInfo.x, y: originInfo.y, z: originInfo.z },
+        旋转: { rx: originInfo.rx, ry: originInfo.ry, rz: originInfo.rz, rw: originInfo.rw },
+        画布坐标: { x: originX, y: originY }
+      });
+    }
+    
     // 新增：渲染场地参考图
     if (backgroundImage && backgroundImage.texture) {
       const sprite = new PIXI.Sprite(backgroundImage.texture);
@@ -747,7 +995,7 @@ const App: React.FC = () => {
         app.stage.off('pointerupoutside', handlePointerUp);
       }
     };
-  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint]);
+  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint, model2D, modelRenderOptions]);
 
   // 监听打点功能开关，关闭时自动取消图片选中
   useEffect(() => {
@@ -995,6 +1243,51 @@ const App: React.FC = () => {
         img.src = url;
       };
       reader.readAsDataURL(file);
+      return false;
+    },
+  };
+
+  // OBJ文件上传props
+  const objUploadProps: UploadProps = {
+    accept: '.obj',
+    showUploadList: false,
+    beforeUpload: async (file) => {
+      try {
+        await loadObjFile(file);
+        return false;
+      } catch (error) {
+        message.error('OBJ文件加载失败');
+        return false;
+      }
+    },
+  };
+
+  // 原点信息文件上传props
+  const originUploadProps: UploadProps = {
+    accept: '.txt,.json',
+    showUploadList: false,
+    beforeUpload: (file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        try {
+          const text = event.target?.result as string;
+          const originData = parseOriginFile(text);
+          setOriginInfo(originData);
+          
+          // 显示原点信息
+          const euler = quaternionToEuler(originData);
+          const eulerDegrees = {
+            x: radiansToDegrees(euler.x),
+            y: radiansToDegrees(euler.y),
+            z: radiansToDegrees(euler.z)
+          };
+          
+          message.success(`原点信息加载成功！位置: (${originData.x.toFixed(2)}, ${originData.y.toFixed(2)}, ${originData.z.toFixed(2)}) 旋转: (${eulerDegrees.x.toFixed(1)}°, ${eulerDegrees.y.toFixed(1)}°, ${eulerDegrees.z.toFixed(1)}°)`);
+        } catch (err) {
+          message.error('原点信息文件解析失败');
+        }
+      };
+      reader.readAsText(file);
       return false;
     },
   };
@@ -1506,16 +1799,19 @@ const App: React.FC = () => {
       </Sider>
       
       <Content style={{ background: '#222', height: '100vh', overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <CanvasView pixiContainer={pixiContainer} style={{
-          width: '100%',
-          height: '100%',
-          minWidth: 800,
-          minHeight: 600,
-          background: '#222',
-          borderRadius: 8,
-          boxShadow: '0 2px 16px #0002',
-          position: 'relative',
-        }} />
+        <CanvasView 
+          pixiContainer={pixiContainer} 
+          style={{
+            width: '100%',
+            height: '100%',
+            minWidth: 800,
+            minHeight: 600,
+            background: '#222',
+            borderRadius: 8,
+            boxShadow: '0 2px 16px #0002',
+            position: 'relative',
+          }}
+        />
       </Content>
 
       <Sider width={200} style={{ background: '#fff', boxShadow: '-2px 0 8px #f0f1f2', height: '100vh', overflow: 'auto' }}>
@@ -1523,6 +1819,9 @@ const App: React.FC = () => {
           uploadPlayAreaProps={uploadPlayAreaProps}
           uploadBlockDetailProps={uploadBlockDetailProps}
           bgImgUploadProps={bgImgUploadProps}
+          objUploadProps={objUploadProps}
+          originUploadProps={originUploadProps}
+          originInfo={originInfo}
           handleExportBgImgPoints={handleExportBgImgPoints}
           handleExportPlayArea={handleExportPlayArea}
           handleExportBlockDetail={handleExportBlockDetail}
@@ -1538,6 +1837,9 @@ const App: React.FC = () => {
           setEnableBgImgPoint={setEnableBgImgPoint}
           helpVisible={helpVisible}
           setHelpVisible={setHelpVisible}
+          modelRenderOptions={modelRenderOptions}
+          updateModelRenderOptions={updateModelRenderOptions}
+          hasObjModel={!!model2D}
         />
       </Sider>
       {blockTooltip.visible && blockTooltip.block && (

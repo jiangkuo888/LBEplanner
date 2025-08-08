@@ -1,11 +1,25 @@
 import React from 'react';
+import * as PIXI from 'pixi.js';
+import { Model2D, ModelRenderOptions } from '../types';
+import ObjModelRenderer from './ObjModelRenderer';
 
 interface CanvasViewProps {
   pixiContainer: React.RefObject<HTMLDivElement | null>;
   style?: React.CSSProperties;
+  model2D?: Model2D | null;
+  modelRenderOptions?: ModelRenderOptions;
+  viewTransform?: { scale: number; offsetX: number; offsetY: number };
+  blocksLayer?: PIXI.Container | null;
 }
 
-const CanvasView: React.FC<CanvasViewProps> = ({ pixiContainer, style }) => {
+const CanvasView: React.FC<CanvasViewProps> = ({ 
+  pixiContainer, 
+  style,
+  model2D,
+  modelRenderOptions,
+  viewTransform = { scale: 1, offsetX: 0, offsetY: 0 },
+  blocksLayer
+}) => {
   return (
     <div
       ref={pixiContainer as React.RefObject<HTMLDivElement>}
@@ -23,4 +37,6 @@ const CanvasView: React.FC<CanvasViewProps> = ({ pixiContainer, style }) => {
   );
 };
 
+// 导出ObjModelRenderer组件，让App.tsx直接使用
+export { ObjModelRenderer };
 export default CanvasView; 
