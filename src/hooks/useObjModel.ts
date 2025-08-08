@@ -53,22 +53,25 @@ export function useObjModel(): UseObjModelReturn {
         return;
       }
       
-      // 将模型单位放大100倍（厘米转米）
+      // 将模型单位放大100倍（厘米转米）并旋转90度（正方向从向下改为向右）
       const scale = 100;
+      const rotation = -Math.PI / 2; // 顺时针旋转90度，将正方向从向下改为向右
       const transformedModel = applyWorldTransform(model2D, {
         scale: scale,
         offsetX: 0, // 不偏移，保持(0,0,0)对齐到场地锚点
-        offsetY: 0
+        offsetY: 0,
+        rotation: rotation
       });
       setModel2D(transformedModel);
-      console.log('应用单位转换（厘米转米）:', { 
+      console.log('应用单位转换和旋转（厘米转米，顺时针90度）:', { 
         scale,
+        rotation: `${(rotation * 180 / Math.PI).toFixed(1)}°`,
         originalSize: { width: modelWidth, height: modelHeight },
         scaledSize: { width: modelWidth * scale, height: modelHeight * scale },
         bounds
       });
       
-      message.success(`OBJ模型加载成功: ${objModel.vertices.length}个顶点, ${objModel.faces.length}个面，已对齐到场地锚点（厘米转米）`);
+      message.success(`OBJ模型加载成功: ${objModel.vertices.length}个顶点, ${objModel.faces.length}个面，已对齐到场地锚点（厘米转米，正方向向右）`);
     } catch (error) {
       console.error('OBJ文件解析失败:', error);
       message.error('OBJ文件解析失败，请检查文件格式');

@@ -163,12 +163,14 @@ export function applyWorldTransform(
     let x = vertex.x * scale + offsetX;
     let y = vertex.y * scale + offsetY;
     
-    // 应用旋转（如果需要）
+    // 应用旋转（如果需要）- 围绕(0,0,0)点进行旋转
     if (rotation !== 0) {
       const cos = Math.cos(rotation);
       const sin = Math.sin(rotation);
-      const centerX = model2D.center.x * scale + offsetX;
-      const centerY = model2D.center.y * scale + offsetY;
+      
+      // 围绕(0,0,0)点进行旋转，而不是围绕模型中心点
+      const centerX = offsetX; // 旋转中心是(0,0,0)点
+      const centerY = offsetY;
       
       const dx = x - centerX;
       const dy = y - centerY;

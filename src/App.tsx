@@ -871,15 +871,15 @@ const App: React.FC = () => {
       .lineTo(zeroX, zeroY + crossLen);
     layer.addChild(cross as unknown as PIXI.DisplayObject);
     
-    // 在十字下方绘制箭头表示场地正方向
+    // 在十字右侧绘制箭头表示场地正方向
     const arrowSize = 8; // 从15缩小到8
-    const arrowY = zeroY + crossLen + 5; // 从10缩小到5
+    const arrowX = zeroX + crossLen + 5; // 从10缩小到5，改为右侧
     const arrow = new PIXI.Graphics();
     arrow.lineStyle(crossThickness, crossColor, 1)
       .beginFill(crossColor, 1)
-      .moveTo(zeroX, arrowY + arrowSize) // 箭头尖端（朝下）
-      .lineTo(zeroX - arrowSize/2, arrowY) // 箭头左翼
-      .lineTo(zeroX + arrowSize/2, arrowY) // 箭头右翼
+      .moveTo(arrowX + arrowSize, zeroY) // 箭头尖端（朝右）
+      .lineTo(arrowX, zeroY - arrowSize/2) // 箭头上翼
+      .lineTo(arrowX, zeroY + arrowSize/2) // 箭头下翼
       .closePath()
       .endFill();
     layer.addChild(arrow as unknown as PIXI.DisplayObject);
