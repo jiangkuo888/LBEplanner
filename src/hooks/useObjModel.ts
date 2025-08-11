@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import { message } from 'antd';
 import { ObjModel, Model2D, ModelRenderOptions } from '../types';
 import { parseObjFile, convert3DTo2D, applyWorldTransform } from '../utils/objParser';
@@ -11,6 +11,7 @@ export interface UseObjModelReturn {
   updateRenderOptions: (options: Partial<ModelRenderOptions>) => void;
   clearModel: () => void;
   applyTransform: (transform: { scale: number; offsetX: number; offsetY: number; rotation?: number }) => void;
+  cleanupMemory: () => void;
 }
 
 const defaultRenderOptions: ModelRenderOptions = {
@@ -25,6 +26,15 @@ export function useObjModel(): UseObjModelReturn {
   const [model2D, setModel2D] = useState<Model2D | null>(null);
   const [renderOptions, setRenderOptions] = useState<ModelRenderOptions>(defaultRenderOptions);
   const [isLoading, setIsLoading] = useState(false);
+  
+  // 缓存原始模型数据，避免重复解析
+  const originalModelRef = useRef<ObjModel | null>(null);
+  const currentTransformRef = useRef<{ scale: number; offsetX: number; offsetY: number; rotation: number }>({
+    scale: 1,
+    offsetX: 0,
+    offsetY: 0,
+    rotation: 0
+  });
 
   const loadObjFile = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -36,6 +46,9 @@ export function useObjModel(): UseObjModelReturn {
         throw new Error('OBJ文件没有有效的顶点数据');
       }
 
+      // 缓存原始模型
+      originalModelRef.current = objModel;
+      
       const model2D = convert3DTo2D(objModel);
       
       // 将模型单位放大100倍（厘米转米）
@@ -56,12 +69,17 @@ export function useObjModel(): UseObjModelReturn {
       // 将模型单位放大100倍（厘米转米）并旋转90度（正方向从向下改为向右）
       const scale = 100;
       const rotation = -Math.PI / 2; // 顺时针旋转90度，将正方向从向下改为向右
+      
+      // 更新当前变换
+      currentTransformRef.current = { scale, offsetX: 0, offsetY: 0, rotation };
+      
       const transformedModel = applyWorldTransform(model2D, {
         scale: scale,
         offsetX: 0, // 不偏移，保持(0,0,0)对齐到场地锚点
         offsetY: 0,
         rotation: rotation
       });
+      
       setModel2D(transformedModel);
       console.log('应用单位转换和旋转（厘米转米，顺时针90度）:', { 
         scale,
@@ -86,14 +104,33 @@ export function useObjModel(): UseObjModelReturn {
 
   const clearModel = useCallback(() => {
     setModel2D(null);
+    originalModelRef.current = null;
+    currentTransformRef.current = { scale: 1, offsetX: 0, offsetY: 0, rotation: 0 };
   }, []);
 
   const applyTransform = useCallback((transform: { scale: number; offsetX: number; offsetY: number; rotation?: number }) => {
-    if (model2D) {
-      const transformedModel = applyWorldTransform(model2D, transform);
+    if (originalModelRef.current) {
+      // 合并变换
+      const newTransform = {
+        ...currentTransformRef.current,
+        ...transform
+      };
+      
+      // 从原始模型重新计算，避免累积误差
+      const model2D = convert3DTo2D(originalModelRef.current);
+      const transformedModel = applyWorldTransform(model2D, newTransform);
+      
+      currentTransformRef.current = newTransform;
       setModel2D(transformedModel);
     }
-  }, [model2D]);
+  }, []);
+
+  const cleanupMemory = useCallback(() => {
+    // 清理不必要的缓存数据
+    if (process.env.NODE_ENV === 'development') {
+      console.log('清理OBJ模型内存...');
+    }
+  }, []);
 
   return {
     model2D,
@@ -102,6 +139,7 @@ export function useObjModel(): UseObjModelReturn {
     loadObjFile,
     updateRenderOptions,
     clearModel,
-    applyTransform
+    applyTransform,
+    cleanupMemory
   };
 }

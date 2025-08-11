@@ -52,6 +52,9 @@ interface RightSiderProps {
   modelRenderOptions?: ModelRenderOptions;
   updateModelRenderOptions?: (options: Partial<ModelRenderOptions>) => void;
   hasObjModel?: boolean;
+  // 新增内存管理相关属性
+  onCleanupMemory?: () => void;
+  memoryInfo?: { undoStackSize: number; redoStackSize: number; maxStackSize: number };
 }
 
 const RightSider: React.FC<RightSiderProps> = (props) => {
@@ -67,6 +70,8 @@ const RightSider: React.FC<RightSiderProps> = (props) => {
     modelRenderOptions,
     updateModelRenderOptions,
     hasObjModel = false,
+    onCleanupMemory,
+    memoryInfo,
   } = props;
 
   return (
@@ -219,6 +224,26 @@ const RightSider: React.FC<RightSiderProps> = (props) => {
         </Space>
         <Text type="secondary" style={{ fontSize: 12, marginLeft: 2, display: 'block', marginTop: 8, textAlign: 'center' }}>一键导出动块配置</Text>
       </SectionCard>
+
+      {/* 内存管理 */}
+      {onCleanupMemory && (
+        <SectionCard title="内存管理">
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <div>
+              <Button icon={<FileOutlined />} style={btnStyle} type="text" onClick={onCleanupMemory}>
+                清理内存
+              </Button>
+            </div>
+            {memoryInfo && (
+              <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 6 }}>
+                <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>当前内存使用：</Text>
+                <Text style={{ fontSize: 11, display: 'block' }}>Undo Stack: {memoryInfo.undoStackSize} / {memoryInfo.maxStackSize}</Text>
+                <Text style={{ fontSize: 11, display: 'block' }}>Redo Stack: {memoryInfo.redoStackSize} / {memoryInfo.maxStackSize}</Text>
+              </div>
+            )}
+          </Space>
+        </SectionCard>
+      )}
     </div>
   );
 };

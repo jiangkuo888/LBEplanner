@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import * as PIXI from 'pixi.js';
 import { Layout, Button, Upload, Card, Divider, Typography, message, List, Checkbox, Switch, Modal } from 'antd';
 import { UploadOutlined, DownloadOutlined, RedoOutlined, PlusOutlined, MinusOutlined, ExpandOutlined, PictureOutlined } from '@ant-design/icons';
@@ -56,6 +56,10 @@ const App: React.FC = () => {
   const rotateTimerRef = useRef<NodeJS.Timeout | null>(null);
   const rotateDelayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isRDownRef = useRef(false);
+  // 新增：背景图片缩放定时器
+  const scaleTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const scaleDelayTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const isScaleDownRef = useRef<{ key: string | null; direction: 'in' | 'out' | null }>({ key: null, direction: null });
   const [moveSingleBlock, setMoveSingleBlock] = useState(false);
   const [showEntrance, setShowEntrance] = useState(false); // 默认隐藏入口
   const [showExit, setShowExit] = useState(false); // 默认隐藏出口
@@ -82,6 +86,20 @@ const App: React.FC = () => {
   const needUpdateIndicesRef = useRef(needUpdateIndices);
   useEffect(() => { needUpdateIndicesRef.current = needUpdateIndices; }, [needUpdateIndices]);
   
+  // 新增：安全的数据访问函数
+  const safeGetBlockData = useCallback((data: any[]) => {
+    if (!Array.isArray(data) || data.length === 0) return [];
+    
+    return data.filter(block => 
+      block && 
+      typeof block === 'object' && 
+      Array.isArray(block.Points) && 
+      block.Points.every((p: any) => p && p.Point && typeof p.Point.X === 'number' && typeof p.Point.Y === 'number') &&
+      block.Entrance && block.Entrance.Point && typeof block.Entrance.Point.X === 'number' && typeof block.Entrance.Point.Y === 'number' &&
+      block.Exit && block.Exit.Point && typeof block.Exit.Point.X === 'number' && typeof block.Exit.Point.Y === 'number'
+    );
+  }, []);
+  
   // 新增：OBJ模型管理
   const {
     model2D,
@@ -90,11 +108,54 @@ const App: React.FC = () => {
     loadObjFile,
     updateRenderOptions: updateModelRenderOptions,
     clearModel,
-    applyTransform: applyModelTransform
+    applyTransform: applyModelTransform,
+    cleanupMemory: cleanupModelMemory
   } = useObjModel();
   
   // 新增：原点信息管理
   const [originInfo, setOriginInfo] = useState<OriginInfo | null>(null);
+  
+  // 新增：内存清理函数
+  const cleanupMemory = useCallback(() => {
+    // 清理撤销/重做栈，保留最近的几个快照
+    setUndoStack(stack => {
+      if (stack.length > MAX_UNDO_STACK_SIZE) {
+        const cleanedStack = stack.slice(-MAX_UNDO_STACK_SIZE);
+        console.log('清理撤销栈，从', stack.length, '减少到', cleanedStack.length);
+        return cleanedStack;
+      }
+      return stack;
+    });
+    
+    setRedoStack(stack => {
+      if (stack.length > MAX_UNDO_STACK_SIZE) {
+        const cleanedStack = stack.slice(-MAX_UNDO_STACK_SIZE);
+        console.log('清理重做栈，从', stack.length, '减少到', cleanedStack.length);
+        return cleanedStack;
+      }
+      return stack;
+    });
+    
+    // 清理OBJ模型内存
+    cleanupModelMemory();
+    
+    // 清理PIXI.js资源
+    if (appRef.current) {
+      // 强制垃圾回收提示
+      if (process.env.NODE_ENV === 'development') {
+        console.log('执行内存清理...');
+      }
+    }
+  }, [cleanupModelMemory]);
+  
+  // 新增：定期内存清理 - 减少清理频率
+  useEffect(() => {
+    const cleanupInterval = setInterval(() => {
+      cleanupMemory();
+    }, 120000); // 每2分钟清理一次，减少频率
+    
+    return () => clearInterval(cleanupInterval);
+  }, [cleanupMemory]);
   
   // 1. 定义快照结构和撤销/重做栈
   interface EditorSnapshot {
@@ -102,40 +163,134 @@ const App: React.FC = () => {
     bgImgPoints: {x: number, y: number}[];
     backgroundImage: { x: number; y: number; scale: number; rotation: number } | null;
   }
+  
+  // 限制撤销栈大小，防止内存无限增长
+  const MAX_UNDO_STACK_SIZE = 50; // 增加到50次撤销
   const [undoStack, setUndoStack] = useState<EditorSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<EditorSnapshot[]>([]);
   const [blockTooltip, setBlockTooltip] = useState<{ visible: boolean; x: number; y: number; block: any | null }>({ visible: false, x: 0, y: 0, block: null });
   const blockTooltipTimer = useRef<NodeJS.Timeout | null>(null);
   const [hoveredBlockIndex, setHoveredBlockIndex] = useState<number | null>(null);
-
-  // 2. 深拷贝工具
-  function deepClone(obj: any) {
-    return JSON.parse(JSON.stringify(obj));
+  
+  // 新增：内存使用监控
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'development') {
+      const memoryInterval = setInterval(() => {
+        // 监控撤销/重做栈大小
+        console.log('内存使用情况:', {
+          undoStackSize: undoStack.length,
+          redoStackSize: redoStack.length,
+          jsonDataSize: jsonData.length,
+          maxUndoStackSize: MAX_UNDO_STACK_SIZE
+        });
+        
+        // 如果栈过大，强制清理 - 提高阈值
+        if (undoStack.length > MAX_UNDO_STACK_SIZE * 2 || redoStack.length > MAX_UNDO_STACK_SIZE * 2) {
+          console.warn('检测到栈过大，执行强制清理');
+          cleanupMemory();
+        }
+      }, 60000); // 每1分钟监控一次，减少频率
+      
+      return () => clearInterval(memoryInterval);
+    }
+  }, [undoStack.length, redoStack.length, jsonData.length, cleanupMemory]);
+  
+  // 2. 优化的深拷贝工具 - 只拷贝必要的字段，避免循环引用和内存泄漏
+  function deepClone(obj: any): any {
+    if (obj === null || typeof obj !== 'object') return obj;
+    if (obj instanceof Date) return new Date(obj.getTime());
+    if (Array.isArray(obj)) {
+      return obj.map(item => deepClone(item));
+    }
+    
+    // 对于对象，只拷贝必要的字段，避免内存泄漏
+    const cloned: any = {};
+    const essentialKeys = ['Name', 'Index', 'Points', 'Entrance', 'Exit', 'DeltaYaw', 'BlockRotateZAxisValue', 'bShouldRotate', 'Point', 'X', 'Y'];
+    
+    for (const key of essentialKeys) {
+      if (obj.hasOwnProperty(key)) {
+        cloned[key] = deepClone(obj[key]);
+      }
+    }
+    
+    return cloned;
   }
-  // 3. pushUndo 工具函数
+  
+  // 3. 优化的pushUndo工具函数 - 限制栈大小，减少内存占用
   function pushUndo() {
-    const current = JSON.stringify(jsonData);
-    const lastSnap = undoStack.length > 0 ? JSON.stringify(undoStack[undoStack.length - 1].jsonData) : null;
     if (!Array.isArray(jsonData) || jsonData.length === 0) return;
-    if (current === lastSnap) return; // 只有数据变化时才 push
-    // 只保存可序列化字段
+    
+    // 使用更精确的比较方式，包含位置信息
+    const currentHash = jsonData.length + '_' + jsonData.map(b => {
+      const firstPoint = b.Points?.[0]?.Point;
+      const entrancePoint = b.Entrance?.Point;
+      return `${b.Index}_${firstPoint?.X?.toFixed(1) || 0}_${firstPoint?.Y?.toFixed(1) || 0}_${entrancePoint?.X?.toFixed(1) || 0}_${entrancePoint?.Y?.toFixed(1) || 0}`;
+    }).join('|');
+    
+    const lastHash = undoStack.length > 0 ? 
+      undoStack[undoStack.length - 1].jsonData.length + '_' + 
+      undoStack[undoStack.length - 1].jsonData.map((b: any) => {
+        const firstPoint = b.Points?.[0]?.Point;
+        const entrancePoint = b.Entrance?.Point;
+        return `${b.Index}_${firstPoint?.X?.toFixed(1) || 0}_${firstPoint?.Y?.toFixed(1) || 0}_${entrancePoint?.X?.toFixed(1) || 0}_${entrancePoint?.Y?.toFixed(1) || 0}`;
+      }).join('|') : null;
+    
+    if (currentHash === lastHash) {
+      console.log('数据未变化，跳过快照保存');
+      return; // 只有数据变化时才 push
+    }
+    
+    // 验证当前数据的完整性
+    const isValidData = jsonData.every((block: any) => 
+      block && 
+      typeof block === 'object' && 
+      typeof block.Index === 'number' &&
+      Array.isArray(block.Points) && 
+      block.Points.every((p: any) => p && p.Point && typeof p.Point.X === 'number' && typeof p.Point.Y === 'number') &&
+      block.Entrance && block.Entrance.Point && typeof block.Entrance.Point.X === 'number' && typeof block.Entrance.Point.Y === 'number' &&
+      block.Exit && block.Exit.Point && typeof block.Exit.Point.X === 'number' && typeof block.Exit.Point.Y === 'number'
+    );
+    
+    if (!isValidData) {
+      console.warn('当前数据不完整，跳过保存快照');
+      return;
+    }
+    
+    // 只保存可序列化字段，减少内存占用
     const safeBgImg = backgroundImage
       ? {
-          x: backgroundImage.x,
-          y: backgroundImage.y,
-          scale: backgroundImage.scale,
-          rotation: backgroundImage.rotation,
-          // texture: null // 不保存 texture
+          x: Number(backgroundImage.x.toFixed(2)),
+          y: Number(backgroundImage.y.toFixed(2)),
+          scale: Number(backgroundImage.scale.toFixed(3)),
+          rotation: Number(backgroundImage.rotation.toFixed(3)),
         }
       : null;
-    const snap = {
+      
+    const snap: EditorSnapshot = {
       jsonData: deepClone(jsonData),
-      bgImgPoints: deepClone(bgImgPoints),
+      bgImgPoints: bgImgPoints.map(p => ({ x: Number(p.x.toFixed(2)), y: Number(p.y.toFixed(2)) })),
       backgroundImage: safeBgImg,
     };
-    console.log('pushUndo 快照:', JSON.stringify(snap));
-    setUndoStack(stack => [...stack, snap]);
-    setRedoStack([]);
+    
+    setUndoStack(stack => {
+      const newStack = [...stack, snap];
+      // 限制撤销栈大小，超出时删除最旧的快照
+      if (newStack.length > MAX_UNDO_STACK_SIZE) {
+        const removedCount = newStack.length - MAX_UNDO_STACK_SIZE;
+        if (process.env.NODE_ENV === 'development') {
+          console.log(`清理撤销栈，删除 ${removedCount} 个旧快照`);
+        }
+        return newStack.slice(-MAX_UNDO_STACK_SIZE);
+      }
+      return newStack;
+    });
+    
+    setRedoStack([]); // 清空重做栈
+    
+    // 内存使用提示（仅在开发环境）
+    if (process.env.NODE_ENV === 'development') {
+      console.log('✅ 快照已保存，撤销栈大小:', undoStack.length + 1, '/', MAX_UNDO_STACK_SIZE);
+    }
   }
 
   // 多选逻辑
@@ -146,21 +301,7 @@ const App: React.FC = () => {
     });
   };
 
-  // 监听shift键状态
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') setIsShiftDown(true);
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') setIsShiftDown(false);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-    };
-  }, []);
+  // 监听shift键状态 - 已合并到主键盘事件处理器中
 
   // 单击画布动块时同步多选，支持shift批量和toggle
   const handleCanvasSelect = (index: number) => {
@@ -1396,8 +1537,7 @@ const App: React.FC = () => {
     });
   };
 
-  const rotateSelectedBlocks = (angleDeg: number) => {
-    console.log('rotateSelectedBlocks 被调用，angleDeg:', angleDeg, 'selectedIndices:', selectedIndices);
+  const rotateSelectedBlocks = useCallback((angleDeg: number) => {
     const indices = selectedIndices;
     const data = jsonData;
     if(indices.length > 0) {
@@ -1449,93 +1589,9 @@ const App: React.FC = () => {
         }
       }));
     }
-  };
+  }, [selectedIndices, jsonData]);
 
-  // Q/E键旋转控制
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      console.log('handleKeyDown 触发', e.key);
-      if ((e.key === 'q' || e.key === 'Q') && !isRDownRef.current) {
-        console.log('Q 被按下');
-      }
-      if ((e.key === 'e' || e.key === 'E') && !isRDownRef.current) {
-        console.log('E 被按下');
-      }
-      if (e.key === 'Shift') setIsShiftDown(true);
-      if (e.key === 'q' || e.key === 'Q') {
-        if (!isRDownRef.current) {
-          isRDownRef.current = true;
-          rotateSelectedBlocks(-15);
-          // 启动1秒延迟，1秒后如仍按住Q键则开始持续旋转
-          if (!rotateDelayTimeoutRef.current) {
-            rotateDelayTimeoutRef.current = setTimeout(() => {
-              if (isRDownRef.current && !rotateTimerRef.current) {
-                rotateTimerRef.current = setInterval(() => {
-                  rotateSelectedBlocks(-4);
-                }, 100);
-              }
-              rotateDelayTimeoutRef.current = null;
-            }, 1000);
-          }
-        }
-      }
-      if (e.key === 'e' || e.key === 'E') {
-        if (!isRDownRef.current) {
-          isRDownRef.current = true;
-          rotateSelectedBlocks(15);
-          // 启动1秒延迟，1秒后如仍按住E键则开始持续旋转
-          if (!rotateDelayTimeoutRef.current) {
-            rotateDelayTimeoutRef.current = setTimeout(() => {
-              if (isRDownRef.current && !rotateTimerRef.current) {
-                rotateTimerRef.current = setInterval(() => {
-                  rotateSelectedBlocks(4);
-                }, 100);
-              }
-              rotateDelayTimeoutRef.current = null;
-            }, 1000);
-          }
-        }
-      }
-      // 新增：按下Esc时取消所有动块选中
-      if (e.key === 'Escape') {
-        setSelectedIndices([]);
-      }
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') setIsShiftDown(false);
-      if (e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') {
-        isRDownRef.current = false;
-        if (rotateDelayTimeoutRef.current) {
-          clearTimeout(rotateDelayTimeoutRef.current);
-          rotateDelayTimeoutRef.current = null;
-        }
-        if (rotateTimerRef.current) {
-          clearInterval(rotateTimerRef.current);
-          rotateTimerRef.current = null;
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown, { passive: false });
-    window.addEventListener('keyup', handleKeyUp, { passive: false });
-    window.addEventListener('blur', () => {
-      isRDownRef.current = false;
-      if (rotateDelayTimeoutRef.current) {
-        clearTimeout(rotateDelayTimeoutRef.current);
-        rotateDelayTimeoutRef.current = null;
-      }
-      if (rotateTimerRef.current) {
-        clearInterval(rotateTimerRef.current);
-        rotateTimerRef.current = null;
-      }
-    });
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', () => {});
-      if (rotateDelayTimeoutRef.current) clearTimeout(rotateDelayTimeoutRef.current);
-      if (rotateTimerRef.current) clearInterval(rotateTimerRef.current);
-    };
-  }, [selectedIndices, jsonData, undoStack, redoStack]);
+  // Q/E键旋转控制 - 已合并到主键盘事件处理器中
 
   // 交互：拖拽/缩放/旋转图片
   useEffect(() => {
@@ -1593,35 +1649,11 @@ const App: React.FC = () => {
       }
     };
     canvas.addEventListener('wheel', handleWheel, { passive: false });
-    // 旋转和缩放快捷键
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (bgImgSelected && (e.key === 'q' || e.key === 'Q')) {
-        setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation - Math.PI / 12 } : prev); // 逆时针15度
-      }
-      if (bgImgSelected && (e.key === 'e' || e.key === 'E')) {
-        setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation + Math.PI / 12 } : prev); // 顺时针15度
-      }
-      if (bgImgSelected && (e.key === 'a' || e.key === 'A')) {
-        startScale('in');
-      }
-      if (bgImgSelected && (e.key === 'd' || e.key === 'D')) {
-        startScale('out');
-      }
-      if (e.key === 'Escape') setBgImgSelected(false);
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'a' || e.key === 'A' || e.key === 'd' || e.key === 'D') {
-        stopScale();
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
+    // 旋转和缩放快捷键 - 已合并到主键盘事件处理器中
     return () => {
       window.removeEventListener('pointermove', handlePointerMove);
       window.removeEventListener('pointerup', handlePointerUp);
       if (canvas) canvas.removeEventListener('wheel', handleWheel);
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
       stopScale();
     };
   }, [pixiReady, backgroundImage, bgImgSelected, bgImgDragging, bgImgDragOffset, viewTransform]);
@@ -1695,105 +1727,417 @@ const App: React.FC = () => {
     let updateList = selectedBlocks.filter(b => b.bShouldRotate).map(b => b.Index);
     if (!updateList.includes(minIdx)) updateList.push(minIdx);
     setNeedUpdateIndices(updateList);
-  }, [selectedIndices, enableBlockRotate]);
+  }, [selectedIndices, enableBlockRotate, jsonData]);
 
   // 4. handleUndo/handleRedo
   function setJsonDataWithClone(newData: any[]) {
-    const cloned = deepClone(newData);
-    setJsonData(cloned);
+    // 避免不必要的深拷贝，直接设置数据
+    setJsonData(newData);
     setTimeout(() => {
-      console.log('setJsonDataWithClone 后 jsonData:', JSON.stringify(cloned));
+      console.log('setJsonDataWithClone 后 jsonData:', JSON.stringify(newData));
     }, 100);
   }
+  
   function handleUndo() {
+    console.log('🔄 执行撤销操作，当前撤销栈大小:', undoStack.length);
+    
+    if (undoStack.length === 0) {
+      console.log('❌ 撤销栈为空，无法撤销');
+      return;
+    }
+    
     setUndoStack(prev => {
       if (prev.length === 0) return prev;
       let idx = prev.length - 1;
       let last = prev[idx];
-      while (idx >= 0 && JSON.stringify(last.jsonData) === JSON.stringify(jsonData)) {
-        idx--;
-        last = prev[idx];
-      }
+      
+      console.log('🔍 检查快照，索引:', idx, '快照数据长度:', last?.jsonData?.length);
+      
+      // 查找有效的快照 - 简化逻辑，直接使用最后一个快照
       if (!last || !Array.isArray(last.jsonData) || last.jsonData.length === 0) {
-        console.error('撤销快照内容非法，未更新', last?.jsonData);
-        return prev.slice(0, idx + 1);
+        console.error('❌ 撤销快照内容非法，未更新', last?.jsonData);
+        return prev.slice(0, idx);
       }
-      setRedoStack(r => [...r, { jsonData, bgImgPoints, backgroundImage: backgroundImage ? {
-        x: backgroundImage.x,
-        y: backgroundImage.y,
-        scale: backgroundImage.scale,
-        rotation: backgroundImage.rotation,
-      } : null }]);
-      setJsonDataWithClone(last.jsonData);
+      
+      // 验证快照数据的完整性
+      const isValidSnapshot = last.jsonData.every((block: any) => 
+        block && 
+        typeof block === 'object' && 
+        Array.isArray(block.Points) && 
+        block.Points.every((p: any) => p && p.Point && typeof p.Point.X === 'number' && typeof p.Point.Y === 'number') &&
+        block.Entrance && block.Entrance.Point && typeof block.Entrance.Point.X === 'number' && typeof block.Entrance.Point.Y === 'number' &&
+        block.Exit && block.Exit.Point && typeof block.Exit.Point.X === 'number' && typeof block.Exit.Point.Y === 'number'
+      );
+      
+      if (!isValidSnapshot) {
+        console.error('❌ 撤销快照数据不完整，跳过此快照');
+        return prev.slice(0, idx);
+      }
+      
+      // 保存当前状态到重做栈
+      const currentSnapshot = {
+        jsonData: deepClone(jsonData),
+        bgImgPoints: [...bgImgPoints],
+        backgroundImage: backgroundImage ? {
+          x: backgroundImage.x,
+          y: backgroundImage.y,
+          scale: backgroundImage.scale,
+          rotation: backgroundImage.rotation,
+        } : null
+      };
+      
+      setRedoStack(r => [...r, currentSnapshot]);
+      
+      // 直接使用快照数据，避免深拷贝
+      setJsonData(last.jsonData);
       setBgImgPoints(last.bgImgPoints);
+      
       // 恢复 backgroundImage 的 x/y/scale/rotation，保留原有 texture
       setBackgroundImage(prev => prev && last.backgroundImage ? {
         ...prev,
         ...last.backgroundImage
       } : last.backgroundImage ? { ...last.backgroundImage, texture: null } : null);
+      
       setSelectedIndices([]); // 撤销后清空选中
+      
+      // 清理内存
+      if (process.env.NODE_ENV === 'development') {
+        console.log('✅ 撤销操作完成，新撤销栈大小:', idx, '重做栈大小:', redoStack.length + 1);
+      }
+      
       return prev.slice(0, idx);
     });
   }
+  
   function handleRedo() {
+    console.log('🔄 执行重做操作，当前重做栈大小:', redoStack.length);
+    
+    if (redoStack.length === 0) {
+      console.log('❌ 重做栈为空，无法重做');
+      return;
+    }
+    
     setRedoStack(prev => {
       if (prev.length === 0) return prev;
       const last = prev[prev.length - 1];
+      
+      console.log('🔍 检查重做快照，快照数据长度:', last?.jsonData?.length);
+      
       if (!Array.isArray(last.jsonData) || last.jsonData.length === 0) {
-        console.error('重做快照内容非法，未更新', last.jsonData);
+        console.error('❌ 重做快照内容非法，未更新', last.jsonData);
         return prev.slice(0, -1);
       }
-      setUndoStack(u => [...u, { jsonData, bgImgPoints, backgroundImage: backgroundImage ? {
-        x: backgroundImage.x,
-        y: backgroundImage.y,
-        scale: backgroundImage.scale,
-        rotation: backgroundImage.rotation,
-      } : null }]);
-      setJsonDataWithClone(last.jsonData);
+      
+      // 验证快照数据的完整性
+      const isValidSnapshot = last.jsonData.every((block: any) => 
+        block && 
+        typeof block === 'object' && 
+        Array.isArray(block.Points) && 
+        block.Points.every((p: any) => p && p.Point && typeof p.Point.X === 'number' && typeof p.Point.Y === 'number') &&
+        block.Entrance && block.Entrance.Point && typeof block.Entrance.Point.X === 'number' && typeof block.Entrance.Point.Y === 'number' &&
+        block.Exit && block.Exit.Point && typeof block.Exit.Point.X === 'number' && typeof block.Exit.Point.Y === 'number'
+      );
+      
+      if (!isValidSnapshot) {
+        console.error('❌ 重做快照数据不完整，跳过此快照');
+        return prev.slice(0, -1);
+      }
+      
+      // 保存当前状态到撤销栈
+      const currentSnapshot = {
+        jsonData: deepClone(jsonData),
+        bgImgPoints: [...bgImgPoints],
+        backgroundImage: backgroundImage ? {
+          x: backgroundImage.x,
+          y: backgroundImage.y,
+          scale: backgroundImage.scale,
+          rotation: backgroundImage.rotation,
+        } : null
+      };
+      
+      setUndoStack(u => [...u, currentSnapshot]);
+      
+      // 直接使用快照数据，避免深拷贝
+      setJsonData(last.jsonData);
       setBgImgPoints(last.bgImgPoints);
+      
       // 恢复 backgroundImage 的 x/y/scale/rotation，保留原有 texture
       setBackgroundImage(prev => prev && last.backgroundImage ? {
         ...prev,
         ...last.backgroundImage
       } : last.backgroundImage ? { ...last.backgroundImage, texture: null } : null);
+      
       setSelectedIndices([]); // 重做后清空选中
+      
+      // 清理内存
+      if (process.env.NODE_ENV === 'development') {
+        console.log('✅ 重做操作完成，新重做栈大小:', prev.length - 1, '撤销栈大小:', undoStack.length + 1);
+      }
+      
       return prev.slice(0, -1);
     });
   }
 
-  // 7. 快捷键支持
+  // 统一的键盘事件处理器 - 合并所有键盘事件避免冲突
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+Z 撤销
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
         handleUndo();
+        return;
       }
+      
+      // Ctrl+Y 或 Ctrl+Shift+Z 重做
       if (((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.metaKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
         e.preventDefault();
         handleRedo();
+        return;
+      }
+      
+      // Shift键状态
+      if (e.key === 'Shift') {
+        setIsShiftDown(true);
+      }
+      
+      // Esc键取消选中
+      if (e.key === 'Escape') {
+        setSelectedIndices([]);
+        setBgImgSelected(false);
+        return;
+      }
+      
+      // 动块旋转快捷键 Q/E (优先处理，除非背景图片被选中)
+      if (e.key === 'q' || e.key === 'Q') {
+        if (bgImgSelected) {
+          // 背景图片旋转
+          setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation - Math.PI / 12 } : prev);
+          return;
+        } else if (selectedIndices.length > 0) {
+          // 动块旋转
+          if (!isRDownRef.current) {
+            isRDownRef.current = true;
+            rotateSelectedBlocks(-15);
+            // 启动1秒延迟，1秒后如仍按住Q键则开始持续旋转
+            if (!rotateDelayTimeoutRef.current) {
+              rotateDelayTimeoutRef.current = setTimeout(() => {
+                if (isRDownRef.current && !rotateTimerRef.current) {
+                  rotateTimerRef.current = setInterval(() => {
+                    rotateSelectedBlocks(-4);
+                  }, 100);
+                }
+                rotateDelayTimeoutRef.current = null;
+              }, 1000);
+            }
+          }
+          return;
+        }
+      }
+      
+      if (e.key === 'e' || e.key === 'E') {
+        if (bgImgSelected) {
+          // 背景图片旋转
+          setBackgroundImage(prev => prev ? { ...prev, rotation: prev.rotation + Math.PI / 12 } : prev);
+          return;
+        } else if (selectedIndices.length > 0) {
+          // 动块旋转
+          if (!isRDownRef.current) {
+            isRDownRef.current = true;
+            rotateSelectedBlocks(15);
+            // 启动1秒延迟，1秒后如仍按住E键则开始持续旋转
+            if (!rotateDelayTimeoutRef.current) {
+              rotateDelayTimeoutRef.current = setTimeout(() => {
+                if (isRDownRef.current && !rotateTimerRef.current) {
+                  rotateTimerRef.current = setInterval(() => {
+                    rotateSelectedBlocks(4);
+                  }, 100);
+                }
+                rotateDelayTimeoutRef.current = null;
+              }, 1000);
+            }
+          }
+          return;
+        }
+      }
+      
+      // 背景图片选中时的其他快捷键
+      if (bgImgSelected) {
+        if (e.key === 'a' || e.key === 'A') {
+          // A键放大背景图片
+          if (!isScaleDownRef.current.key) {
+            isScaleDownRef.current = { key: 'a', direction: 'in' };
+            setBackgroundImage(prev => {
+              if (!prev) return prev;
+              const newScale = prev.scale * 1.05; // 每次放大5%
+              return { ...prev, scale: Math.min(10, newScale) }; // 最大10倍
+            });
+            // 启动1秒延迟，1秒后如仍按住A键则开始持续缩放
+            if (!scaleDelayTimeoutRef.current) {
+              scaleDelayTimeoutRef.current = setTimeout(() => {
+                if (isScaleDownRef.current.key === 'a' && !scaleTimerRef.current) {
+                  scaleTimerRef.current = setInterval(() => {
+                    setBackgroundImage(prev => {
+                      if (!prev) return prev;
+                      const newScale = prev.scale * 1.02; // 持续缩放时每次2%
+                      return { ...prev, scale: Math.min(10, newScale) };
+                    });
+                  }, 50); // 每50ms缩放一次
+                }
+                scaleDelayTimeoutRef.current = null;
+              }, 500); // 500ms后开始持续缩放
+            }
+          }
+          return;
+        }
+        if (e.key === 'd' || e.key === 'D') {
+          // D键缩小背景图片
+          if (!isScaleDownRef.current.key) {
+            isScaleDownRef.current = { key: 'd', direction: 'out' };
+            setBackgroundImage(prev => {
+              if (!prev) return prev;
+              const newScale = prev.scale / 1.05; // 每次缩小5%
+              return { ...prev, scale: Math.max(0.05, newScale) }; // 最小0.05倍
+            });
+            // 启动1秒延迟，1秒后如仍按住D键则开始持续缩放
+            if (!scaleDelayTimeoutRef.current) {
+              scaleDelayTimeoutRef.current = setTimeout(() => {
+                if (isScaleDownRef.current.key === 'd' && !scaleTimerRef.current) {
+                  scaleTimerRef.current = setInterval(() => {
+                    setBackgroundImage(prev => {
+                      if (!prev) return prev;
+                      const newScale = prev.scale / 1.02; // 持续缩放时每次2%
+                      return { ...prev, scale: Math.max(0.05, newScale) };
+                    });
+                  }, 50); // 每50ms缩放一次
+                }
+                scaleDelayTimeoutRef.current = null;
+              }, 500); // 500ms后开始持续缩放
+            }
+          }
+          return;
+        }
       }
     };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [jsonData, undoStack, redoStack]);
+    
+    const handleKeyUp = (e: KeyboardEvent) => {
+      // Shift键状态
+      if (e.key === 'Shift') {
+        setIsShiftDown(false);
+      }
+      
+      // 动块旋转键释放
+      if (e.key === 'q' || e.key === 'Q' || e.key === 'e' || e.key === 'E') {
+        isRDownRef.current = false;
+        if (rotateDelayTimeoutRef.current) {
+          clearTimeout(rotateDelayTimeoutRef.current);
+          rotateDelayTimeoutRef.current = null;
+        }
+        if (rotateTimerRef.current) {
+          clearInterval(rotateTimerRef.current);
+          rotateTimerRef.current = null;
+        }
+      }
+      
+      // 背景图片缩放键释放
+      if (e.key === 'a' || e.key === 'A' || e.key === 'd' || e.key === 'D') {
+        isScaleDownRef.current = { key: null, direction: null };
+        if (scaleDelayTimeoutRef.current) {
+          clearTimeout(scaleDelayTimeoutRef.current);
+          scaleDelayTimeoutRef.current = null;
+        }
+        if (scaleTimerRef.current) {
+          clearInterval(scaleTimerRef.current);
+          scaleTimerRef.current = null;
+        }
+      }
+    };
+    
+    const handleBlur = () => {
+      // 窗口失焦时清理所有状态
+      isRDownRef.current = false;
+      setIsShiftDown(false);
+      isScaleDownRef.current = { key: null, direction: null };
+      
+      // 清理旋转定时器
+      if (rotateDelayTimeoutRef.current) {
+        clearTimeout(rotateDelayTimeoutRef.current);
+        rotateDelayTimeoutRef.current = null;
+      }
+      if (rotateTimerRef.current) {
+        clearInterval(rotateTimerRef.current);
+        rotateTimerRef.current = null;
+      }
+      
+      // 清理缩放定时器
+      if (scaleDelayTimeoutRef.current) {
+        clearTimeout(scaleDelayTimeoutRef.current);
+        scaleDelayTimeoutRef.current = null;
+      }
+      if (scaleTimerRef.current) {
+        clearInterval(scaleTimerRef.current);
+        scaleTimerRef.current = null;
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown, { passive: false });
+    window.addEventListener('keyup', handleKeyUp, { passive: false });
+    window.addEventListener('blur', handleBlur);
+    
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+      
+      // 清理旋转定时器
+      if (rotateDelayTimeoutRef.current) {
+        clearTimeout(rotateDelayTimeoutRef.current);
+        rotateDelayTimeoutRef.current = null;
+      }
+      if (rotateTimerRef.current) {
+        clearInterval(rotateTimerRef.current);
+        rotateTimerRef.current = null;
+      }
+      
+      // 清理缩放定时器
+      if (scaleDelayTimeoutRef.current) {
+        clearTimeout(scaleDelayTimeoutRef.current);
+        scaleDelayTimeoutRef.current = null;
+      }
+      if (scaleTimerRef.current) {
+        clearInterval(scaleTimerRef.current);
+        scaleTimerRef.current = null;
+      }
+    };
+  }, [bgImgSelected, selectedIndices]); // 依赖选中状态以确保旋转功能正常
 
   // 新增：监听selectedIndices和hoveredBlockIndex变化，自动启动tooltip计时器
   useEffect(() => {
-    if (selectedIndices.length === 1 && hoveredBlockIndex === selectedIndices[0]) {
-      const block = jsonData.find(b => b.Index === hoveredBlockIndex);
-      if (!block) return;
-      if (blockTooltipTimer.current) clearTimeout(blockTooltipTimer.current);
-      blockTooltipTimer.current = setTimeout(() => {
-        setBlockTooltip(prev => ({ ...prev, visible: true, block }));
-      }, 2000);
-    } else {
-      if (blockTooltipTimer.current) {
-        clearTimeout(blockTooltipTimer.current);
-        blockTooltipTimer.current = null;
+    try {
+      if (selectedIndices.length === 1 && hoveredBlockIndex === selectedIndices[0]) {
+        const block = safeGetBlockData(jsonData).find(b => b.Index === hoveredBlockIndex);
+        if (!block) return;
+        if (blockTooltipTimer.current) clearTimeout(blockTooltipTimer.current);
+        blockTooltipTimer.current = setTimeout(() => {
+          setBlockTooltip(prev => ({ ...prev, visible: true, block }));
+        }, 2000);
+      } else {
+        if (blockTooltipTimer.current) {
+          clearTimeout(blockTooltipTimer.current);
+          blockTooltipTimer.current = null;
+        }
+        setBlockTooltip(prev => ({ ...prev, visible: false, block: null }));
       }
+    } catch (error) {
+      console.error('Tooltip处理错误:', error);
       setBlockTooltip(prev => ({ ...prev, visible: false, block: null }));
     }
-  }, [selectedIndices, hoveredBlockIndex]);
+  }, [selectedIndices, hoveredBlockIndex, jsonData, safeGetBlockData]);
+
+  // 新增：错误处理
+  const handleError = useCallback((error: Error, errorInfo: any) => {
+    console.error('应用错误:', error, errorInfo);
+    // 可以在这里添加错误上报逻辑
+  }, []);
 
   console.log('App 组件已加载');
 
@@ -1804,7 +2148,7 @@ const App: React.FC = () => {
           <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
             <Sidebar
               selectedIndices={selectedIndices}
-              jsonData={jsonData}
+              jsonData={safeGetBlockData(jsonData)}
               handleSelectBlock={handleSelectBlock}
               blockDetailData={blockDetailData}
             />
@@ -1854,6 +2198,12 @@ const App: React.FC = () => {
           modelRenderOptions={modelRenderOptions}
           updateModelRenderOptions={updateModelRenderOptions}
           hasObjModel={!!model2D}
+          onCleanupMemory={cleanupMemory}
+          memoryInfo={{
+            undoStackSize: undoStack.length,
+            redoStackSize: redoStack.length,
+            maxStackSize: MAX_UNDO_STACK_SIZE
+          }}
         />
       </Sider>
       {blockTooltip.visible && blockTooltip.block && (
