@@ -226,7 +226,8 @@ const RightSider: React.FC<RightSiderProps> = (props) => {
       </SectionCard>
 
       {/* 内存管理 */}
-      {onCleanupMemory && (
+      {/* 暂时隐藏内存管理UI，但保留功能代码 */}
+      {false && onCleanupMemory && (
         <SectionCard title="内存管理">
           <Space direction="vertical" size={16} style={{ width: '100%' }}>
             <div>
@@ -237,8 +238,8 @@ const RightSider: React.FC<RightSiderProps> = (props) => {
             {memoryInfo && (
               <div style={{ background: '#f5f5f5', padding: 12, borderRadius: 6 }}>
                 <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>当前内存使用：</Text>
-                <Text style={{ fontSize: 11, display: 'block' }}>Undo Stack: {memoryInfo.undoStackSize} / {memoryInfo.maxStackSize}</Text>
-                <Text style={{ fontSize: 11, display: 'block' }}>Redo Stack: {memoryInfo.redoStackSize} / {memoryInfo.maxStackSize}</Text>
+                <Text style={{ fontSize: 11, display: 'block' }}>Undo Stack: {memoryInfo?.undoStackSize || 0} / {memoryInfo?.maxStackSize || 0}</Text>
+                <Text style={{ fontSize: 11, display: 'block' }}>Redo Stack: {memoryInfo?.redoStackSize || 0} / {memoryInfo?.maxStackSize || 0}</Text>
               </div>
             )}
           </Space>

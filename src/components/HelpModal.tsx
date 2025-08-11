@@ -53,6 +53,33 @@ const HelpModal: React.FC<HelpModalProps> = ({ open, onClose }) => {
             </ul>
           </li>
         </ol>
+        
+        {/* 版本号信息 */}
+        <div style={{ 
+          marginTop: 24, 
+          paddingTop: 16, 
+          borderTop: '1px solid #f0f0f0',
+          textAlign: 'center',
+          color: '#666',
+          fontSize: 14
+        }}>
+          <div style={{ marginBottom: 8 }}>
+            <strong>LBEplanner</strong> 版本信息
+          </div>
+          <div style={{ 
+            display: 'inline-block',
+            background: '#f5f5f5',
+            padding: '6px 12px',
+            borderRadius: 6,
+            fontFamily: 'monospace',
+            fontSize: 13,
+            fontWeight: '500',
+            color: '#333',
+            border: '1px solid #d9d9d9'
+          }}>
+            v1.1.0
+          </div>
+        </div>
       </div>
     </Modal>
   );

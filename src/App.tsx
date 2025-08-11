@@ -9,12 +9,15 @@ import CanvasView from './components/CanvasView';
 import RightSider from './components/RightSider';
 import BlockList from './components/BlockList';
 import { BlockDetailContent } from './components/BlockDetail';
+import ObjModelRenderer from './components/ObjModelRenderer';
 import { useObjModel } from './hooks/useObjModel';
 import { OriginInfo } from './types';
 import { parseOriginFile, quaternionToEuler, radiansToDegrees } from './utils/originParser';
 
 const { Sider, Content } = Layout;
 const { Title, Text } = Typography;
+
+
 
 interface Point {
   X: number;
@@ -425,68 +428,53 @@ const App: React.FC = () => {
     layer.removeChildren();
     const { scale, offsetX, offsetY } = viewTransform;
     
-    // 新增：渲染OBJ模型
+    // 渲染OBJ模型（采用和动块相同的渲染方式）
     if (model2D && modelRenderOptions && modelRenderOptions.visible) {
-      const graphics = new PIXI.Graphics();
       const { color, lineWidth, fillAlpha, opacity } = modelRenderOptions;
       
-      // 设置透明度
-      graphics.alpha = opacity;
-      
-      // 计算模型的边界和缩放
-      const modelWidth = model2D.bounds.maxX - model2D.bounds.minX;
-      const modelHeight = model2D.bounds.maxY - model2D.bounds.minY;
-      const modelCenterX = model2D.center.x;
-      const modelCenterY = model2D.center.y;
-      
-      // 计算模型在画布中的位置
-      const canvasCenterX = modelCenterX * scale + offsetX;
-      const canvasCenterY = modelCenterY * scale + offsetY;
-      
-      // 渲染每个面
+      // 为每个面创建独立的Graphics对象（像动块一样）
       for (const face of model2D.faces) {
         if (face.vertices.length < 3) continue;
         
-        // 获取面的顶点
+        const faceGraphics = new PIXI.Graphics();
+        faceGraphics.alpha = opacity;
+        
         const faceVertices = face.vertices.map(vertexIndex => {
           const vertex = model2D.vertices[vertexIndex];
           if (!vertex) return null;
           
-          // 应用视图变换
           return {
             x: vertex.x * scale + offsetX,
             y: vertex.y * scale + offsetY
           };
         }).filter(Boolean) as { x: number; y: number }[];
         
-        if (faceVertices.length < 3) continue;
-        
-        // 绘制面
-        graphics.lineStyle(lineWidth, color, 0.8);
-        graphics.beginFill(color, fillAlpha);
-        graphics.moveTo(faceVertices[0].x, faceVertices[0].y);
-        
-        for (let i = 1; i < faceVertices.length; i++) {
-          graphics.lineTo(faceVertices[i].x, faceVertices[i].y);
+        if (faceVertices.length >= 3) {
+          // 每个面独立绘制，不累积
+          faceGraphics.lineStyle(lineWidth, color, 0.8);
+          faceGraphics.beginFill(color, fillAlpha);
+          faceGraphics.moveTo(faceVertices[0].x, faceVertices[0].y);
+          
+          for (let i = 1; i < faceVertices.length; i++) {
+            faceGraphics.lineTo(faceVertices[i].x, faceVertices[i].y);
+          }
+          
+          faceGraphics.closePath().endFill();
+          
+          // 立即添加到容器
+          layer.addChild(faceGraphics as unknown as PIXI.DisplayObject);
         }
-        
-        graphics.closePath();
-        graphics.endFill();
       }
       
-      // 添加到图层
-      layer.addChild(graphics as unknown as PIXI.DisplayObject);
-      
-      // 添加边长标注 - 只标注最外层边界的边长
-      const edgeLabels: PIXI.Text[] = [];
+      // 渲染边长标注
       const processedEdges = new Map<string, {
         v1: { x: number; y: number };
         v2: { x: number; y: number };
         length: number;
         count: number;
       }>();
-      
-      // 第一步：收集所有边并统计出现次数
+
+      // 收集所有边并统计出现次数
       for (const face of model2D.faces) {
         if (face.vertices.length < 3) continue;
         
@@ -499,18 +487,15 @@ const App: React.FC = () => {
           
           if (!currentVertex || !nextVertex) continue;
           
-          // 使用坐标创建边的唯一标识符（四舍五入到小数点后3位）
           const v1x = Math.round(currentVertex.x * 1000) / 1000;
           const v1y = Math.round(currentVertex.y * 1000) / 1000;
           const v2x = Math.round(nextVertex.x * 1000) / 1000;
           const v2y = Math.round(nextVertex.y * 1000) / 1000;
           
-          // 创建边的唯一标识符（按坐标排序）
           const edgeKey = v1x < v2x || (v1x === v2x && v1y < v2y) 
             ? `${v1x},${v1y}-${v2x},${v2y}`
             : `${v2x},${v2y}-${v1x},${v1y}`;
           
-          // 计算边的世界坐标长度（米）
           const worldLength = Math.sqrt(
             Math.pow(nextVertex.x - currentVertex.x, 2) + 
             Math.pow(nextVertex.y - currentVertex.y, 2)
@@ -528,45 +513,29 @@ const App: React.FC = () => {
           }
         }
       }
-      
-      // 第二步：只标注外边界的长边（出现次数为1的边，且长度大于1米）
+
+      // 只标注外边界的长边
       for (const [edgeKey, edge] of Array.from(processedEdges.entries())) {
-        // 只标注外边界（出现次数为1）且长度大于1米的边
         if (edge.count === 1 && edge.length > 1) {
-          // 计算边的中点位置
           const midX = (edge.v1.x + edge.v2.x) / 2 * scale + offsetX;
           const midY = (edge.v1.y + edge.v2.y) / 2 * scale + offsetY;
           
-          // 创建标注文本
-          const labelText = `${edge.length.toFixed(1)}m`;
-          const label = new PIXI.Text(labelText, {
-            fontSize: 12,
+          const label = new PIXI.Text(`${edge.length.toFixed(1)}m`, {
+            fontSize: 14,
             fill: 0xffffff,
             fontWeight: 'bold',
             align: 'center',
             stroke: 0x000000,
             strokeThickness: 2
           });
-          
           label.anchor.set(0.5);
           label.x = midX;
-          label.y = midY - 8; // 稍微向上偏移，避免遮挡边线
-          
-          edgeLabels.push(label);
+          label.y = midY;
           layer.addChild(label as unknown as PIXI.DisplayObject);
         }
       }
       
-      console.log('OBJ模型已渲染:', { 
-        面数: model2D.faces.length, 
-        顶点数: model2D.vertices.length, 
-        尺寸: { width: modelWidth, height: modelHeight },
-        总边数: processedEdges.size,
-        外边界边数: Array.from(processedEdges.values()).filter(edge => edge.count === 1).length,
-        标注数量: edgeLabels.length
-      });
-    } else {
-      console.log('OBJ模型未渲染:', { model2D: !!model2D, modelRenderOptions: !!modelRenderOptions, visible: modelRenderOptions?.visible });
+      console.log('OBJ模型已渲染，面数:', model2D.faces.length, '顶点数:', model2D.vertices.length);
     }
     
     // 新增：渲染原点信息
@@ -1150,7 +1119,7 @@ const App: React.FC = () => {
         app.stage.off('pointerupoutside', handlePointerUp);
       }
     };
-  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint, model2D, modelRenderOptions]);
+  }, [jsonData, selectedIndices, pixiReady, viewTransform, showEntrance, showExit, backgroundImage, bgImgSelected, bgImgPoints, enableBgImgPoint]);
 
   // 监听打点功能开关，关闭时自动取消图片选中
   useEffect(() => {
@@ -2170,6 +2139,9 @@ const App: React.FC = () => {
             position: 'relative',
           }}
         />
+        
+        {/* 优化的OBJ模型渲染器 */}
+        {/* OBJ模型现在直接在App.tsx的useEffect中渲染，不再需要独立组件 */}
       </Content>
 
       <Sider width={200} style={{ background: '#fff', boxShadow: '-2px 0 8px #f0f1f2', height: '100vh', overflow: 'auto' }}>
@@ -2226,6 +2198,8 @@ const App: React.FC = () => {
           <BlockDetailContent block={blockTooltip.block} />
         </div>
       )}
+      
+
     </Layout>
   );
 };
